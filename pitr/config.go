@@ -19,9 +19,8 @@ import (
 )
 
 const (
-	toolName = "tidb-binlog-pitr"
+	toolName   = "tidb-binlog-pitr"
 	timeFormat = "2006-01-02 15:04:05"
-	maxMemorySize = 2 * 1024 * 1024 * 1024 // 2G
 )
 
 // Config is the main configuration for the retore tool.

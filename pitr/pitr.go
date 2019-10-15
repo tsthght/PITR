@@ -12,7 +12,7 @@ import (
 
 // PITR is the main part of the merge binlog tool.
 type PITR struct {
-	cfg    *Config
+	cfg *Config
 
 	filter *filter.Filter
 }
@@ -49,14 +49,14 @@ func (r *PITR) Process() error {
 
 		log.Info("process", zap.Reflect("binlog", binlog))
 		/*
-		ignore, err := filterBinlog(r.filter, binlog)
-		if err != nil {
-			return errors.Annotate(err, "filter binlog failed")
-		}
+			ignore, err := filterBinlog(r.filter, binlog)
+			if err != nil {
+				return errors.Annotate(err, "filter binlog failed")
+			}
 
-		if ignore {
-			continue
-		}
+			if ignore {
+				continue
+			}
 		*/
 	}
 }

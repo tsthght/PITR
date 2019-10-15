@@ -35,8 +35,8 @@ func filterFiles(fileNames []string, startTS int64, endTS int64) ([]string, int6
 	binlogFiles := make([]string, 0, len(fileNames))
 	var (
 		latestBinlogFile string
-		latestFileSize int64
-		allFileSize int64
+		latestFileSize   int64
+		allFileSize      int64
 	)
 
 	appendFile := func() {
@@ -88,7 +88,7 @@ func getFirstBinlogCommitTSAndFileSize(filename string) (int64, int64, error) {
 		return 0, 0, errors.Annotatef(err, "get file stat %s error", filename)
 	}
 	fileSize := stat.Size()
-	
+
 	_, binlogFileName := path.Split(filename)
 	_, ts, err := bf.ParseBinlogName(binlogFileName)
 	if err != nil {
