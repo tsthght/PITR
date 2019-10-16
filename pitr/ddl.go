@@ -1,8 +1,15 @@
-package pltr
+package pitr
 
 import (
+	"sync"
+	"time"
+	"os"
+	"strings"
 	"database/sql"
 
+	"github.com/pingcap/log"
+	"go.uber.org/zap"
+	"github.com/pingcap/errors"
 	tidblite "github.com/WangXiangUSTC/tidb-lite"
 )
 
@@ -17,6 +24,12 @@ WHERE table_schema = ? AND table_name = ?
 ORDER BY seq_in_index ASC;`
 )
 
+var (
+	// ErrTableNotExist means the table not exist.
+	ErrTableNotExist = errors.New("table not exist")
+	defaultTiDBDir = "/tmp/tidb"
+)
+
 type DDLHandle struct {
 	db *sql.DB
 
@@ -24,7 +37,11 @@ type DDLHandle struct {
 }
 
 func NewDDLHandle() (*DDLHandle, error) {
-	tidbServer, err := tidblite.NewTiDBServer(tidblite.NewOptions(c.MkDir()).WithPort(4040))
+	if err := os.Mkdir(defaultTiDBDir, os.ModePerm); err != nil {
+		return nil, err
+	}
+
+	tidbServer, err := tidblite.NewTiDBServer(tidblite.NewOptions(defaultTiDBDir).WithPort(4040))
 	if err != nil {
 		return nil, err
 	}
@@ -49,23 +66,31 @@ func NewDDLHandle() (*DDLHandle, error) {
 }
 
 func (d *DDLHandle) ExecuteDDL(ddl string) error {
-	if err := d.db.Execute(ddl); err != nil {
+	log.Info("execute ddl", zap.String("ddl", ddl))
+	if _, err := d.db.Exec(ddl); err != nil {
 		return errors.Trace(err)
 	}
 
-	info, err = getTableInfo(d.db, schema, table)
+	schema, table, err := parserSchemaTableFromDDL(ddl)
 	if err != nil {
 		return errors.Trace(err)
 	}
 
-	s.tableInfos.Store(quoteSchema(schema, table), info)
+	info, err := getTableInfo(d.db, schema, table)
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	d.tableInfos.Store(quoteSchema(schema, table), info)
+
+	return nil
 }
 
 func (d *DDLHandle) GetTableInfo(schema, table string) (*tableInfo, error) {
 	v, ok := d.tableInfos.Load(quoteSchema(schema, table))
 	if ok {
-		info = v.(*tableInfo)
-		return
+		info := v.(*tableInfo)
+		return info, nil
 	}
 	return getTableInfo(d.db, schema, table)
 }
@@ -82,15 +107,12 @@ type indexInfo struct {
 	columns []string
 }
 
-/ getTableInfo returns information like (non-generated) column names and
+// getTableInfo returns information like (non-generated) column names and
 // unique keys about the specified table
-func getTableInfo(db *gosql.DB, schema string, table string) (info *tableInfo, err error) {
+func getTableInfo(db *sql.DB, schema string, table string) (info *tableInfo, err error) {
 	info = new(tableInfo)
 
 	if info.columns, err = getColsOfTbl(db, schema, table); err != nil {
-		if err == ErrTableNotExist {
-			return nil, err
-		}
 		return nil, errors.Trace(err)
 	}
 
@@ -145,4 +167,52 @@ func getColsOfTbl(db *sql.DB, schema, table string) ([]string, error) {
 	}
 
 	return cols, nil
+}
+
+// https://dev.mysql.com/doc/mysql-infoschema-excerpt/5.7/en/statistics-table.html
+func getUniqKeys(db *sql.DB, schema, table string) (uniqueKeys []indexInfo, err error) {
+	rows, err := db.Query(uniqKeysSQL, schema, table)
+	if err != nil {
+		err = errors.Trace(err)
+		return
+	}
+	defer rows.Close()
+
+	var nonUnique int
+	var keyName string
+	var columnName string
+	var seqInIndex int // start at 1
+
+	// get pk and uk
+	// key for PRIMARY or other index name
+	for rows.Next() {
+		err = rows.Scan(&nonUnique, &keyName, &seqInIndex, &columnName)
+		if err != nil {
+			err = errors.Trace(err)
+			return
+		}
+
+		if nonUnique == 1 {
+			continue
+		}
+
+		var i int
+		// Search for indexInfo with the current keyName
+		for i = 0; i < len(uniqueKeys); i++ {
+			if uniqueKeys[i].name == keyName {
+				uniqueKeys[i].columns = append(uniqueKeys[i].columns, columnName)
+				break
+			}
+		}
+		// If we don't find the indexInfo with the loop above, create a new one
+		if i == len(uniqueKeys) {
+			uniqueKeys = append(uniqueKeys, indexInfo{keyName, []string{columnName}})
+		}
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, errors.Trace(err)
+	}
+
+	return
 }
