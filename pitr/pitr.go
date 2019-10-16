@@ -53,6 +53,8 @@ func (r *PITR) Process() error {
 		return errors.Trace(err)
 	}
 
+	merge.Close()
+
 	/*
 	pbReader, err := newDirPbReader(r.cfg.Dir, r.cfg.StartTSO, r.cfg.StopTSO)
 	if err != nil {

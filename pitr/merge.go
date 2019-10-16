@@ -97,6 +97,12 @@ Loop:
 	return nil
 }
 
+func (m *Merge) Close() {
+	if err := os.RemoveAll(m.tempDir); err != nil {
+		log.Warn("remove temp dir", zap.String("dir", m.tempDir), zap.Error(err))
+	}
+}
+
 func (m *Merge) read(file string) (chan *pb.Binlog, chan error) {
 	binlogChan := make(chan *pb.Binlog, 10)
 	errChan := make(chan error)
