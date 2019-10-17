@@ -12,6 +12,7 @@ require (
 	github.com/pingcap/parser v0.0.0-20190910041007-2a177b291004
 	github.com/pingcap/tidb v0.0.0-20190917133016-45d7da02f66e
 	github.com/pingcap/tidb-binlog v0.0.0-20191010021753-8e49c63b7528
+	github.com/pingcap/tipb v0.0.0-20190428032612-535e1abaa330
 	github.com/remyoudompheng/bigfft v0.0.0-20190728182440-6a916e37a237 // indirect
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
 	github.com/uber/jaeger-client-go v2.19.0+incompatible // indirect

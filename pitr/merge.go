@@ -5,9 +5,10 @@ import (
 	"path"
 	"bufio"
 	"io"
-	//"fmt"
+	"fmt"
 
 	pb "github.com/pingcap/tidb-binlog/proto/binlog"
+	tb "github.com/pingcap/tipb/go-binlog"
 	"github.com/pingcap/tidb-binlog/pkg/binlogfile"
 	"go.uber.org/zap"
 	"github.com/pingcap/errors"
@@ -34,6 +35,8 @@ type Merge struct {
 	// schema -> table -> table-file
 	fd map[string]map[string]*os.File
 
+	keyRow map[string]*Row
+
 	ddlHandle *DDLHandle
 }
 
@@ -53,6 +56,7 @@ func NewMerge(binlogFiles []string, allFileSize int64) (*Merge, error) {
 		binlogFiles: binlogFiles,
 		splitNum:    int(allFileSize / maxMemorySize),
 		ddlHandle:   ddlHandle,
+		keyRow:      make(map[string]*Row),
 	}, nil
 }
 
@@ -90,23 +94,67 @@ func (m *Merge) Reduce() error {
 Loop:
 		for {
 			select {
-			case binlog := <-binlogCh:
-				log.Info("read binlog", zap.Reflect("binlog", binlog))
-				_, err := m.analyzeBinlog(binlog)
-				if err != nil {
-					return err
-				}
-			case err := <-errCh:
-				if errors.Cause(err) == io.EOF {
-					log.Info("read file end", zap.String("file", fName))
+			case binlog, ok := <-binlogCh:
+				if ok {
+					//log.Info("read binlog", zap.Reflect("binlog", binlog))
+					_, err := m.analyzeBinlog(binlog)
+					if err != nil {
+						return err
+					}
+				} else {
 					break Loop
 				}
+			case err := <-errCh:
 				return err
 			}
 		}
 	}
 
-	return nil
+	return m.Output()
+}
+
+func (m *Merge) Output() error {
+	binlogger, err := binlogfile.OpenBinlogger("./new_binlog")
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	binlog := &pb.Binlog {
+		Tp: pb.BinlogType_DML,
+		CommitTs: 123,
+		DmlData: &pb.DMLData{
+			Events: make([]pb.Event, 0, 10),
+		},
+	}
+	for _, row := range m.keyRow {
+		r := make([][]byte, 0, 10)
+		for _, c := range row.cols {
+			data, err := c.Marshal()
+			if err != nil {
+				return err
+			}
+			r = append(r, data)
+		}
+
+		log.Info("generate new event", zap.String("event", fmt.Sprintf("%v", row)))
+		newEvent := pb.Event{
+			SchemaName: &row.schema,
+			TableName: &row.table,
+			Tp:  row.eventType,
+			Row: r,
+		}
+		binlog.DmlData.Events = append(binlog.DmlData.Events, newEvent)
+	}
+	
+	data, err := binlog.Marshal()
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	_, err = binlogger.WriteTail(&tb.Entity{Payload: data})
+	return errors.Trace(err)
+
+
 }
 
 func (m *Merge) Close() {
@@ -132,8 +180,14 @@ func (m *Merge) read(file string) (chan *pb.Binlog, chan error) {
 		for {
 			binlog, _, err := Decode(reader)
 			if err != nil {
-				errChan <- errors.Trace(err)
-				return
+				if errors.Cause(err) == io.EOF {
+					log.Info("read file end", zap.String("file", file))
+					close(binlogChan)
+					return
+				} else {
+					errChan <- errors.Trace(err)
+					return
+				}
 			}
 
 			binlogChan <- binlog
@@ -162,7 +216,7 @@ func (m *Merge) analyzeBinlog(binlog *pb.Binlog) ([]*Row, error) {
 	return nil, nil
 }
 
-func (m *Merge)translateDML(binlog *pb.Binlog) ([]*Row, error) {
+func (m *Merge) translateDML(binlog *pb.Binlog) ([]*Row, error) {
 	dml := binlog.DmlData
 	if dml == nil {
 		return nil, errors.New("dml binlog's data can't be empty")
@@ -177,25 +231,93 @@ func (m *Merge)translateDML(binlog *pb.Binlog) ([]*Row, error) {
 		tp := e.GetTp()
 		row := e.GetRow()
 
+		var r *Row
+
+		tableInfo, err := m.ddlHandle.GetTableInfo(schema, table)
+		if err != nil {
+			return nil, err
+		}
+
+		log.Info("event type", zap.Reflect("tp", tp))
+
 		switch tp {
 		case pb.EventType_Insert:
-			tableInfo, err := m.ddlHandle.GetTableInfo(schema, table)
+			key, cols, err := getInsertAndDeleteRowKey(row ,tableInfo)
 			if err != nil {
 				return nil, err
 			}
-			key, err := getRowKey(row ,tableInfo)
-			if err != nil {
-				return nil, err
+			log.Info("insert print key", zap.String("key", key))
+
+			r = &Row{
+				schema: schema,
+				table:  table,
+				eventType: tp,
+				oldKey:  key,
+				cols: cols,
 			}
-			log.Info("print key", zap.String("key", key))
+
 		case pb.EventType_Update:
-			
+			key, cKey, cols, err := getUpdateRowKey(row ,tableInfo)
+			if err != nil {
+				return nil, err
+			}
+			log.Info("update print key", zap.String("key", key), zap.String("cKey", cKey))
+
+			r = &Row{
+				schema: schema,
+				table:  table,
+				eventType: tp,
+				oldKey:  key,
+				newKey:  cKey,
+				cols: cols,
+			}
 		case pb.EventType_Delete:
+			key, cols,  err := getInsertAndDeleteRowKey(row, tableInfo)
+			if err != nil {
+				return nil, err
+			}
+			log.Info("delete print key", zap.String("key", key))
+
+			r = &Row{
+				schema: schema,
+				table:  table,
+				eventType: tp,
+				oldKey:  key,
+				cols: cols,
+			}
 			
 		default:
 			panic("unreachable")
 		}
+
+		m.HandleRow(r)
 	}
 
 	return nil, nil
+}
+
+
+func (m *Merge) HandleRow(row *Row) {
+	log.Info("before handle", zap.String("row", fmt.Sprintf("%v", row)))
+	key := row.oldKey
+	tp := row.eventType
+	oldRow, ok := m.keyRow[key]
+	if ok {
+		oldRow.Merge(row)
+		if oldRow.isDeleted {
+			log.Info("delete key", zap.String("key", key))
+			delete(m.keyRow, key)
+			return
+		}
+
+		if tp == pb.EventType_Update {
+			// may update pk
+			delete(m.keyRow, key)
+			m.keyRow[oldRow.oldKey] = oldRow
+		}
+	} else {
+		m.keyRow[row.oldKey] = row
+	}
+
+	log.Info("after handle", zap.String("row", fmt.Sprintf("%v", m.keyRow[row.oldKey])))
 }

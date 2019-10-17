@@ -107,6 +107,9 @@ func (d *DDLHandle) Close() {
 }
 
 type tableInfo struct {
+	schema string
+	table string
+
 	columns    []string
 	primaryKey *indexInfo
 	// include primary key if have
@@ -121,7 +124,10 @@ type indexInfo struct {
 // getTableInfo returns information like (non-generated) column names and
 // unique keys about the specified table
 func getTableInfo(db *sql.DB, schema string, table string) (info *tableInfo, err error) {
-	info = new(tableInfo)
+	info = &tableInfo{
+		schema: schema,
+		table:  table,
+	}
 
 	if info.columns, err = getColsOfTbl(db, schema, table); err != nil {
 		return nil, errors.Trace(err)

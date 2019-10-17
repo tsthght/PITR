@@ -18,10 +18,11 @@ import (
 
 )
 
-// event.GetRow()
-func getRowKey(row [][]byte, info *tableInfo) (string, error) {
+// key is combine with schema, table and pk/uk => schema-name|table-name|pk/uk
+func getInsertAndDeleteRowKey(row [][]byte, info *tableInfo) (string, []*pb.Column,error) {
 	//cols = make(map[])
 	values := make(map[string]interface{})
+	cols := make([]*pb.Column, 0, 10)
 
 	//cols = make([]string, 0, len(row))
 	//args = make([]interface{}, 0, len(row))
@@ -29,25 +30,27 @@ func getRowKey(row [][]byte, info *tableInfo) (string, error) {
 		col := &pb.Column{}
 		err := col.Unmarshal(c)
 		if err != nil {
-			return "", errors.Trace(err)
+			return "", nil, errors.Trace(err)
 		}
 		//cols = append(cols, col.Name)
+		cols = append(cols, col)
 
 		_, val, err := codec.DecodeOne(col.Value)
 		if err != nil {
-			return "", errors.Trace(err)
+			return "", nil, errors.Trace(err)
 		}
 
 		tp := col.Tp[0]
 		val = formatValue(val, tp)
-		log.Debug("format value",
+		log.Info("format value",
 			zap.String("col name", col.Name),
 			zap.String("mysql type", col.MysqlType),
 			zap.Reflect("value", val.GetValue()))
 		//args = append(args, val.GetValue())
 		values[col.Name] = val.GetValue()
+		//changedValue := val.GetChangedValue()
 	}
-	var key string
+	key := fmt.Sprintf("%s|%s|", info.schema, info.table)
 	var columns []string
 	if info.primaryKey != nil {
 		columns = info.primaryKey.columns
@@ -58,7 +61,64 @@ func getRowKey(row [][]byte, info *tableInfo) (string, error) {
 		key += fmt.Sprintf("%v|", values[col])
 	}
 
-	return key, nil
+	return key, cols, nil
+}
+
+// key is combine with schema, table and pk/uk => schema-name|table-name|pk/uk
+func getUpdateRowKey(row [][]byte, info *tableInfo) (string, string, []*pb.Column, error) {
+	//cols = make(map[])
+	values := make(map[string]interface{})
+	changedValues := make(map[string]interface{})
+	cols := make([]*pb.Column, 0, 10)
+
+	//cols = make([]string, 0, len(row))
+	//args = make([]interface{}, 0, len(row))
+	for _, c := range row {
+		col := &pb.Column{}
+		err := col.Unmarshal(c)
+		if err != nil {
+			return "", "", nil, errors.Trace(err)
+		}
+		//cols = append(cols, col.Name)
+		cols = append(cols, col)
+
+		_, val, err := codec.DecodeOne(col.Value)
+		if err != nil {
+			return "", "", nil, errors.Trace(err)
+		}
+
+		_, cVal, err := codec.DecodeOne(col.ChangedValue)
+		if err != nil {
+			return "", "", nil, errors.Trace(err)
+		}
+
+		tp := col.Tp[0]
+		val = formatValue(val, tp)
+		cVal = formatValue(cVal, tp)
+		log.Info("format value",
+			zap.String("col name", col.Name),
+			zap.String("mysql type", col.MysqlType),
+			zap.Reflect("value", val.GetValue()),
+			zap.Reflect("value", cVal.GetValue()))
+		//args = append(args, val.GetValue())
+		values[col.Name] = val.GetValue()
+		changedValues[col.Name] = cVal.GetValue()
+		//changedValue := val.GetChangedValue()
+	}
+	key := fmt.Sprintf("%s|%s|", info.schema, info.table)
+	cKey := fmt.Sprintf("%s|%s|", info.schema, info.table)
+	var columns []string
+	if info.primaryKey != nil {
+		columns = info.primaryKey.columns
+	} else {
+		columns = info.columns
+	}
+	for _, col := range columns {
+		key += fmt.Sprintf("%v|", values[col])
+		cKey += fmt.Sprintf("%v|", changedValues[col])
+	}
+
+	return key, cKey, cols, nil
 }
 
 func copy(src, dst string) (int64, error) {
