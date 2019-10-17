@@ -34,6 +34,8 @@ type DDLHandle struct {
 	db *sql.DB
 
 	tableInfos sync.Map
+
+	tidbServer *tidblite.TiDBServer
 }
 
 func NewDDLHandle() (*DDLHandle, error) {
@@ -62,6 +64,7 @@ func NewDDLHandle() (*DDLHandle, error) {
 
 	return &DDLHandle{
 		db: dbConn,
+		tidbServer: tidbServer,
 	}, nil
 }
 
@@ -93,6 +96,14 @@ func (d *DDLHandle) GetTableInfo(schema, table string) (*tableInfo, error) {
 		return info, nil
 	}
 	return getTableInfo(d.db, schema, table)
+}
+
+func (d *DDLHandle) Close() {
+	d.tidbServer.Close()
+
+	if err := os.RemoveAll(defaultTiDBDir); err != nil {
+		log.Warn("remove temp dir", zap.String("dir", defaultTiDBDir), zap.Error(err))
+	}
 }
 
 type tableInfo struct {

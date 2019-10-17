@@ -44,6 +44,8 @@ func (r *PITR) Process() error {
 	if err != nil {
 		return errors.Trace(err)
 	}
+
+	defer merge.Close()
 	
 	if err := merge.Map(); err != nil {
 		return errors.Trace(err)
@@ -52,8 +54,7 @@ func (r *PITR) Process() error {
 	if err := merge.Reduce(); err != nil {
 		return errors.Trace(err)
 	}
-
-	merge.Close()
+	
 
 	/*
 	pbReader, err := newDirPbReader(r.cfg.Dir, r.cfg.StartTSO, r.cfg.StopTSO)
