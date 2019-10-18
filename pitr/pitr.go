@@ -1,7 +1,7 @@
 package pitr
 
 import (
-	"io"
+	//"io"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
@@ -31,24 +31,31 @@ func New(cfg *Config) (*PITR, error) {
 
 // Process runs the main procedure.
 func (r *PITR) Process() error {
-	pbReader, err := newDirPbReader(r.cfg.Dir, r.cfg.StartTSO, r.cfg.StopTSO)
+	files, err := searchFiles(r.cfg.Dir)
 	if err != nil {
-		return errors.Annotatef(err, "new reader failed dir: %s", r.cfg.Dir)
+		return errors.Annotate(err, "searchFiles failed")
 	}
-	defer pbReader.close()
 
-	for {
-		binlog, err := pbReader.read()
-		if err != nil {
-			if errors.Cause(err) == io.EOF {
-				return nil
-			}
-
-			return errors.Trace(err)
-		}
-
-		log.Info("process", zap.Reflect("binlog", binlog))
+	files, fileSize, err := filterFiles(files, r.cfg.StartTSO, r.cfg.StopTSO)
+	if err != nil {
+		return errors.Annotate(err, "filterFiles failed")
 	}
+	merge, err := NewMerge(files, fileSize)
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	defer merge.Close()
+
+	if err := merge.Map(); err != nil {
+		return errors.Trace(err)
+	}
+
+	if err := merge.Reduce(); err != nil {
+		return errors.Trace(err)
+	}
+
+	return nil
 }
 
 // Close closes the PITR object.
