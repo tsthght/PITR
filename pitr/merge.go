@@ -184,7 +184,7 @@ func (m *Merge) newDMLBinlog(commitTS int64) *pb.Binlog {
 		Tp:       pb.BinlogType_DML,
 		CommitTs: commitTS,
 		DmlData: &pb.DMLData{
-			Events: make([]pb.Event, 0, 10),
+			Events: make([]pb.Event, 0, 1000),
 		},
 	}
 }
@@ -285,12 +285,11 @@ func (m *Merge) handleDML(binlog *pb.Binlog) ([]*Event, error) {
 		}
 
 		switch tp {
-		case pb.EventType_Insert:
+		case pb.EventType_Insert, pb.EventType_Delete:
 			key, cols, err := getInsertAndDeleteRowKey(row, tableInfo)
 			if err != nil {
 				return nil, err
 			}
-			log.Info("insert print key", zap.String("key", key))
 
 			r = &Event{
 				schema:    schema,
@@ -305,7 +304,6 @@ func (m *Merge) handleDML(binlog *pb.Binlog) ([]*Event, error) {
 			if err != nil {
 				return nil, err
 			}
-			log.Debug("update print key", zap.String("key", key), zap.String("cKey", cKey))
 
 			r = &Event{
 				schema:    schema,
@@ -313,20 +311,6 @@ func (m *Merge) handleDML(binlog *pb.Binlog) ([]*Event, error) {
 				eventType: tp,
 				oldKey:    key,
 				newKey:    cKey,
-				cols:      cols,
-			}
-		case pb.EventType_Delete:
-			key, cols, err := getInsertAndDeleteRowKey(row, tableInfo)
-			if err != nil {
-				return nil, err
-			}
-			log.Debug("delete print key", zap.String("key", key))
-
-			r = &Event{
-				schema:    schema,
-				table:     table,
-				eventType: tp,
-				oldKey:    key,
 				cols:      cols,
 			}
 
@@ -354,7 +338,7 @@ func (m *Merge) HandleEvent(row *Event) {
 		}
 
 		if tp == pb.EventType_Update {
-			// may update pk
+			// update may change pk/uk value, so key may be changed
 			delete(m.keyEvent, key)
 			m.keyEvent[oldRow.oldKey] = oldRow
 		}
