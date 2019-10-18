@@ -1,30 +1,34 @@
 package pitr
 
 import (
+	"bufio"
+	"fmt"
+	"io"
 	"os"
 	"path"
-	"bufio"
-	"io"
-	"fmt"
 
-	pb "github.com/pingcap/tidb-binlog/proto/binlog"
-	tb "github.com/pingcap/tipb/go-binlog"
-	"github.com/pingcap/tidb-binlog/pkg/binlogfile"
-	"go.uber.org/zap"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/tidb-binlog/pkg/binlogfile"
+	pb "github.com/pingcap/tidb-binlog/proto/binlog"
+	tb "github.com/pingcap/tipb/go-binlog"
+	"go.uber.org/zap"
 )
 
 const maxMemorySize int64 = 2 * 1024 * 1024 * 1024 // 2G
 
 var (
-	defaultTempDir string = "./temp"
+	defaultTempDir   string = "./temp"
+	defaultOutputDir string = "./new_binlog"
 )
 
 // Merge used to merge same keys binlog into one
 type Merge struct {
 	// tempDir used to save splited binlog file
 	tempDir string
+
+	// outputDir used to save merged binlog file
+	outputDir string
 
 	// which binlog file need merge
 	binlogFiles []string
@@ -33,9 +37,9 @@ type Merge struct {
 	splitNum int
 
 	// schema -> table -> table-file
-	fd map[string]map[string]*os.File
+	//fd map[string]map[string]*os.File
 
-	keyRow map[string]*Row
+	keyEvent map[string]*Event
 
 	ddlHandle *DDLHandle
 }
@@ -50,18 +54,21 @@ func NewMerge(binlogFiles []string, allFileSize int64) (*Merge, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return &Merge{
 		tempDir:     defaultTempDir,
+		outputDir:   defaultOutputDir,
 		binlogFiles: binlogFiles,
 		splitNum:    int(allFileSize / maxMemorySize),
 		ddlHandle:   ddlHandle,
-		keyRow:      make(map[string]*Row),
+		keyEvent:    make(map[string]*Event),
 	}, nil
 }
 
 // Map split binlog into multiple files
 func (m *Merge) Map() error {
+
+	// FIEME: now Map is not implements, so just copy binlog file to temp dir
 	for _, bFile := range m.binlogFiles {
 		_, fileName := path.Split(bFile)
 		_, err := copy(bFile, path.Join(m.tempDir, fileName))
@@ -91,12 +98,11 @@ func (m *Merge) Reduce() error {
 	for _, fName := range fNames {
 		binlogCh, errCh := m.read(path.Join(m.tempDir, fName))
 
-Loop:
+	Loop:
 		for {
 			select {
 			case binlog, ok := <-binlogCh:
 				if ok {
-					//log.Info("read binlog", zap.Reflect("binlog", binlog))
 					_, err := m.analyzeBinlog(binlog)
 					if err != nil {
 						return err
@@ -113,20 +119,21 @@ Loop:
 	return m.Output()
 }
 
+// Output merge some events to one binlog, and then write to file
 func (m *Merge) Output() error {
-	binlogger, err := binlogfile.OpenBinlogger("./new_binlog")
+	binlogger, err := binlogfile.OpenBinlogger(m.outputDir)
 	if err != nil {
 		return errors.Trace(err)
 	}
 
-	binlog := &pb.Binlog {
-		Tp: pb.BinlogType_DML,
+	binlog := &pb.Binlog{
+		Tp:       pb.BinlogType_DML,
 		CommitTs: 123,
 		DmlData: &pb.DMLData{
 			Events: make([]pb.Event, 0, 10),
 		},
 	}
-	for _, row := range m.keyRow {
+	for _, row := range m.keyEvent {
 		r := make([][]byte, 0, 10)
 		for _, c := range row.cols {
 			data, err := c.Marshal()
@@ -139,13 +146,13 @@ func (m *Merge) Output() error {
 		log.Info("generate new event", zap.String("event", fmt.Sprintf("%v", row)))
 		newEvent := pb.Event{
 			SchemaName: &row.schema,
-			TableName: &row.table,
-			Tp:  row.eventType,
-			Row: r,
+			TableName:  &row.table,
+			Tp:         row.eventType,
+			Row:        r,
 		}
 		binlog.DmlData.Events = append(binlog.DmlData.Events, newEvent)
 	}
-	
+
 	data, err := binlog.Marshal()
 	if err != nil {
 		return errors.Trace(err)
@@ -153,7 +160,6 @@ func (m *Merge) Output() error {
 
 	_, err = binlogger.WriteTail(&tb.Entity{Payload: data})
 	return errors.Trace(err)
-
 
 }
 
@@ -165,6 +171,7 @@ func (m *Merge) Close() {
 	m.ddlHandle.Close()
 }
 
+// read reads binlog from pb file
 func (m *Merge) read(file string) (chan *pb.Binlog, chan error) {
 	binlogChan := make(chan *pb.Binlog, 10)
 	errChan := make(chan error)
@@ -197,7 +204,7 @@ func (m *Merge) read(file string) (chan *pb.Binlog, chan error) {
 	return binlogChan, errChan
 }
 
-func (m *Merge) analyzeBinlog(binlog *pb.Binlog) ([]*Row, error) {
+func (m *Merge) analyzeBinlog(binlog *pb.Binlog) ([]*Event, error) {
 	switch binlog.Tp {
 	case pb.BinlogType_DML:
 		_, err := m.translateDML(binlog)
@@ -209,6 +216,7 @@ func (m *Merge) analyzeBinlog(binlog *pb.Binlog) ([]*Row, error) {
 		if err != nil {
 			return nil, err
 		}
+		// FIXME: now only execute ddl in local tidb, need also generate binlog for it
 
 	default:
 		panic("unreachable")
@@ -216,14 +224,14 @@ func (m *Merge) analyzeBinlog(binlog *pb.Binlog) ([]*Row, error) {
 	return nil, nil
 }
 
-func (m *Merge) translateDML(binlog *pb.Binlog) ([]*Row, error) {
+// translate DML binlog to multiple Event
+func (m *Merge) translateDML(binlog *pb.Binlog) ([]*Event, error) {
 	dml := binlog.DmlData
 	if dml == nil {
 		return nil, errors.New("dml binlog's data can't be empty")
 	}
 
 	for _, event := range dml.Events {
-
 		schema := event.GetSchemaName()
 		table := event.GetTableName()
 
@@ -231,93 +239,88 @@ func (m *Merge) translateDML(binlog *pb.Binlog) ([]*Row, error) {
 		tp := e.GetTp()
 		row := e.GetRow()
 
-		var r *Row
+		var r *Event
 
 		tableInfo, err := m.ddlHandle.GetTableInfo(schema, table)
 		if err != nil {
 			return nil, err
 		}
 
-		log.Info("event type", zap.Reflect("tp", tp))
-
 		switch tp {
 		case pb.EventType_Insert:
-			key, cols, err := getInsertAndDeleteRowKey(row ,tableInfo)
+			key, cols, err := getInsertAndDeleteRowKey(row, tableInfo)
 			if err != nil {
 				return nil, err
 			}
 			log.Info("insert print key", zap.String("key", key))
 
-			r = &Row{
-				schema: schema,
-				table:  table,
+			r = &Event{
+				schema:    schema,
+				table:     table,
 				eventType: tp,
-				oldKey:  key,
-				cols: cols,
+				oldKey:    key,
+				cols:      cols,
 			}
 
 		case pb.EventType_Update:
-			key, cKey, cols, err := getUpdateRowKey(row ,tableInfo)
+			key, cKey, cols, err := getUpdateRowKey(row, tableInfo)
 			if err != nil {
 				return nil, err
 			}
-			log.Info("update print key", zap.String("key", key), zap.String("cKey", cKey))
+			log.Debug("update print key", zap.String("key", key), zap.String("cKey", cKey))
 
-			r = &Row{
-				schema: schema,
-				table:  table,
+			r = &Event{
+				schema:    schema,
+				table:     table,
 				eventType: tp,
-				oldKey:  key,
-				newKey:  cKey,
-				cols: cols,
+				oldKey:    key,
+				newKey:    cKey,
+				cols:      cols,
 			}
 		case pb.EventType_Delete:
-			key, cols,  err := getInsertAndDeleteRowKey(row, tableInfo)
+			key, cols, err := getInsertAndDeleteRowKey(row, tableInfo)
 			if err != nil {
 				return nil, err
 			}
-			log.Info("delete print key", zap.String("key", key))
+			log.Debug("delete print key", zap.String("key", key))
 
-			r = &Row{
-				schema: schema,
-				table:  table,
+			r = &Event{
+				schema:    schema,
+				table:     table,
 				eventType: tp,
-				oldKey:  key,
-				cols: cols,
+				oldKey:    key,
+				cols:      cols,
 			}
-			
+
 		default:
 			panic("unreachable")
 		}
 
-		m.HandleRow(r)
+		m.HandleEvent(r)
 	}
 
 	return nil, nil
 }
 
-
-func (m *Merge) HandleRow(row *Row) {
-	log.Info("before handle", zap.String("row", fmt.Sprintf("%v", row)))
+// HandleEvent handles event, if event's key already exist, then merge this event
+// otherwise save this event
+func (m *Merge) HandleEvent(row *Event) {
 	key := row.oldKey
 	tp := row.eventType
-	oldRow, ok := m.keyRow[key]
+	oldRow, ok := m.keyEvent[key]
 	if ok {
 		oldRow.Merge(row)
 		if oldRow.isDeleted {
-			log.Info("delete key", zap.String("key", key))
-			delete(m.keyRow, key)
+			delete(m.keyEvent, key)
 			return
 		}
 
 		if tp == pb.EventType_Update {
 			// may update pk
-			delete(m.keyRow, key)
-			m.keyRow[oldRow.oldKey] = oldRow
+			delete(m.keyEvent, key)
+			m.keyEvent[oldRow.oldKey] = oldRow
 		}
 	} else {
-		m.keyRow[row.oldKey] = row
+		m.keyEvent[row.oldKey] = row
 	}
-
-	log.Info("after handle", zap.String("row", fmt.Sprintf("%v", m.keyRow[row.oldKey])))
 }

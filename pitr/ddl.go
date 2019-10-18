@@ -1,16 +1,18 @@
 package pitr
 
 import (
-	"sync"
-	"time"
+	"database/sql"
 	"os"
 	"strings"
-	"database/sql"
+	"sync"
+	"time"
 
-	"github.com/pingcap/log"
-	"go.uber.org/zap"
-	"github.com/pingcap/errors"
 	tidblite "github.com/WangXiangUSTC/tidb-lite"
+	"github.com/pingcap/errors"
+	"github.com/pingcap/log"
+	"github.com/pingcap/parser"
+	"github.com/pingcap/parser/ast"
+	"go.uber.org/zap"
 )
 
 const (
@@ -27,9 +29,10 @@ ORDER BY seq_in_index ASC;`
 var (
 	// ErrTableNotExist means the table not exist.
 	ErrTableNotExist = errors.New("table not exist")
-	defaultTiDBDir = "/tmp/tidb"
+	defaultTiDBDir   = "/tmp/tidb"
 )
 
+// DDLHandle used to handle ddl, and privide the table info
 type DDLHandle struct {
 	db *sql.DB
 
@@ -39,10 +42,10 @@ type DDLHandle struct {
 }
 
 func NewDDLHandle() (*DDLHandle, error) {
+	// run a mock tidb in local, used to execute ddl and get table info
 	if err := os.Mkdir(defaultTiDBDir, os.ModePerm); err != nil {
 		return nil, err
 	}
-
 	tidbServer, err := tidblite.NewTiDBServer(tidblite.NewOptions(defaultTiDBDir).WithPort(4040))
 	if err != nil {
 		return nil, err
@@ -57,17 +60,17 @@ func NewDDLHandle() (*DDLHandle, error) {
 		}
 		break
 	}
-
 	if err != nil {
 		return nil, err
 	}
 
 	return &DDLHandle{
-		db: dbConn,
+		db:         dbConn,
 		tidbServer: tidbServer,
 	}, nil
 }
 
+// ExecuteDDL executes ddl, and then update the table's info
 func (d *DDLHandle) ExecuteDDL(ddl string) error {
 	log.Info("execute ddl", zap.String("ddl", ddl))
 	if _, err := d.db.Exec(ddl); err != nil {
@@ -83,12 +86,12 @@ func (d *DDLHandle) ExecuteDDL(ddl string) error {
 	if err != nil {
 		return errors.Trace(err)
 	}
-
 	d.tableInfos.Store(quoteSchema(schema, table), info)
 
 	return nil
 }
 
+// GetTableInfo get table's info
 func (d *DDLHandle) GetTableInfo(schema, table string) (*tableInfo, error) {
 	v, ok := d.tableInfos.Load(quoteSchema(schema, table))
 	if ok {
@@ -108,7 +111,7 @@ func (d *DDLHandle) Close() {
 
 type tableInfo struct {
 	schema string
-	table string
+	table  string
 
 	columns    []string
 	primaryKey *indexInfo
@@ -229,6 +232,79 @@ func getUniqKeys(db *sql.DB, schema, table string) (uniqueKeys []indexInfo, err 
 
 	if err = rows.Err(); err != nil {
 		return nil, errors.Trace(err)
+	}
+
+	return
+}
+
+// parserSchemaTableFromDDL parses ddl query to get schema and table
+// ddl like `use test; create table`
+func parserSchemaTableFromDDL(ddlQuery string) (schema, table string, err error) {
+	stmts, _, err := parser.New().Parse(ddlQuery, "", "")
+	if err != nil {
+		return "", "", err
+	}
+
+	haveUseStmt := false
+
+	for _, stmt := range stmts {
+		switch node := stmt.(type) {
+		case *ast.UseStmt:
+			haveUseStmt = true
+			schema = node.DBName
+		case *ast.CreateDatabaseStmt:
+			schema = node.Name
+		case *ast.DropDatabaseStmt:
+			schema = node.Name
+		case *ast.TruncateTableStmt:
+			if len(node.Table.Schema.O) != 0 {
+				schema = node.Table.Schema.O
+			}
+			table = node.Table.Name.O
+		case *ast.CreateIndexStmt:
+			if len(node.Table.Schema.O) != 0 {
+				schema = node.Table.Schema.O
+			}
+			table = node.Table.Name.O
+		case *ast.CreateTableStmt:
+			if len(node.Table.Schema.O) != 0 {
+				schema = node.Table.Schema.O
+			}
+			table = node.Table.Name.O
+		case *ast.DropIndexStmt:
+			if len(node.Table.Schema.O) != 0 {
+				schema = node.Table.Schema.O
+			}
+			table = node.Table.Name.O
+		case *ast.AlterTableStmt:
+			if len(node.Table.Schema.O) != 0 {
+				schema = node.Table.Schema.O
+			}
+			table = node.Table.Name.O
+		case *ast.DropTableStmt:
+			// FIXME: may drop more than one table in a ddl
+			if len(node.Tables[0].Schema.O) != 0 {
+				schema = node.Tables[0].Schema.O
+			}
+			table = node.Tables[0].Name.O
+		case *ast.RenameTableStmt:
+			if len(node.NewTable.Schema.O) != 0 {
+				schema = node.NewTable.Schema.O
+			}
+			table = node.NewTable.Name.O
+		default:
+			return "", "", errors.Errorf("unknown ddl type, ddl: %s", ddlQuery)
+		}
+	}
+
+	if haveUseStmt {
+		if len(stmts) != 2 {
+			return "", "", errors.Errorf("invalid ddl %s", ddlQuery)
+		}
+	} else {
+		if len(stmts) != 1 {
+			return "", "", errors.Errorf("invalid ddl %s", ddlQuery)
+		}
 	}
 
 	return

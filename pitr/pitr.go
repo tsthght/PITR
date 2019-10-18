@@ -46,36 +46,14 @@ func (r *PITR) Process() error {
 	}
 
 	defer merge.Close()
-	
+
 	if err := merge.Map(); err != nil {
 		return errors.Trace(err)
 	}
-	
+
 	if err := merge.Reduce(); err != nil {
 		return errors.Trace(err)
 	}
-	
-
-	/*
-	pbReader, err := newDirPbReader(r.cfg.Dir, r.cfg.StartTSO, r.cfg.StopTSO)
-	if err != nil {
-		return errors.Annotatef(err, "new reader failed dir: %s", r.cfg.Dir)
-	}
-	defer pbReader.close()
-
-	for {
-		binlog, err := pbReader.read()
-		if err != nil {
-			if errors.Cause(err) == io.EOF {
-				return nil
-			}
-
-			return errors.Trace(err)
-		}
-
-		log.Info("process", zap.Reflect("binlog", binlog))
-	}
-	*/
 
 	return nil
 }
