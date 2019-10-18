@@ -27,6 +27,9 @@ ORDER BY seq_in_index ASC;`
 )
 
 var (
+	// ErrTableNotExist means the table not exist.
+	ErrTableNotExist = errors.New("table not exist")
+
 	// used for run a mock tidb
 	defaultTiDBDir   = "/tmp/pitr_tidb"
 	defaultTiDBPort = 40404
@@ -84,6 +87,10 @@ func (d *DDLHandle) ExecuteDDL(ddl string) error {
 
 	info, err := getTableInfo(d.db, schema, table)
 	if err != nil {
+		// ddl drop table
+		if err == ErrTableNotExist {
+			return nil
+		}
 		return errors.Trace(err)
 	}
 	d.tableInfos.Store(quoteSchema(schema, table), info)
@@ -183,7 +190,7 @@ func getColsOfTbl(db *sql.DB, schema, table string) ([]string, error) {
 
 	// if no any columns returns, means the table not exist.
 	if len(cols) == 0 {
-		return nil, errors.New("table not exist")
+		return nil, ErrTableNotExist
 	}
 
 	return cols, nil
