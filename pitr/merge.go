@@ -41,7 +41,13 @@ type Merge struct {
 
 	keyEvent map[string]*Event
 
+	// used for handle ddl, and update table info
 	ddlHandle *DDLHandle
+
+	// used for write output binlog
+	binlogger binlogfile.Binlogger
+
+	maxCommitTS int64
 }
 
 // NewMerge returns a new Merge
@@ -55,13 +61,19 @@ func NewMerge(binlogFiles []string, allFileSize int64) (*Merge, error) {
 		return nil, err
 	}
 
+	binlogger, err := binlogfile.OpenBinlogger(defaultOutputDir)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+
 	return &Merge{
-		tempDir:     defaultTempDir,
-		outputDir:   defaultOutputDir,
+		tempDir: defaultTempDir,
+		//outputDir:   defaultOutputDir,
 		binlogFiles: binlogFiles,
 		splitNum:    int(allFileSize / maxMemorySize),
 		ddlHandle:   ddlHandle,
 		keyEvent:    make(map[string]*Event),
+		binlogger:   binlogger,
 	}, nil
 }
 
@@ -103,10 +115,11 @@ func (m *Merge) Reduce() error {
 			select {
 			case binlog, ok := <-binlogCh:
 				if ok {
-					_, err := m.analyzeBinlog(binlog)
+					err := m.analyzeBinlog(binlog)
 					if err != nil {
 						return err
 					}
+					m.maxCommitTS = binlog.CommitTs
 				} else {
 					break Loop
 				}
@@ -116,24 +129,15 @@ func (m *Merge) Reduce() error {
 		}
 	}
 
-	return m.Output()
+	return m.FlushDMLBinlog(m.maxCommitTS)
 }
 
-// Output merge some events to one binlog, and then write to file
-func (m *Merge) Output() error {
-	binlogger, err := binlogfile.OpenBinlogger(m.outputDir)
-	if err != nil {
-		return errors.Trace(err)
-	}
-
-	binlog := &pb.Binlog{
-		Tp:       pb.BinlogType_DML,
-		CommitTs: 123,
-		DmlData: &pb.DMLData{
-			Events: make([]pb.Event, 0, 10),
-		},
-	}
+// FlushDMLBinlog merge some events to one binlog, and then write to file
+func (m *Merge) FlushDMLBinlog(commitTS int64) error {
+	binlog := m.newDMLBinlog(commitTS)
+	i := 0
 	for _, row := range m.keyEvent {
+		i++
 		r := make([][]byte, 0, 10)
 		for _, c := range row.cols {
 			data, err := c.Marshal()
@@ -151,16 +155,48 @@ func (m *Merge) Output() error {
 			Row:        r,
 		}
 		binlog.DmlData.Events = append(binlog.DmlData.Events, newEvent)
+
+		// every binlog contain 1000 rows as default
+		if i%1000 == 0 {
+			err := m.writeBinlog(binlog)
+			if err != nil {
+				return err
+			}
+			binlog = m.newDMLBinlog(commitTS)
+		}
 	}
 
+	if len(binlog.DmlData.Events) != 0 {
+		err := m.writeBinlog(binlog)
+		if err != nil {
+			return err
+		}
+	}
+
+	// all event have already flush to file, clean these event
+	m.keyEvent = make(map[string]*Event)
+
+	return nil
+}
+
+func (m *Merge) newDMLBinlog(commitTS int64) *pb.Binlog {
+	return &pb.Binlog{
+		Tp:       pb.BinlogType_DML,
+		CommitTs: commitTS,
+		DmlData: &pb.DMLData{
+			Events: make([]pb.Event, 0, 10),
+		},
+	}
+}
+
+func (m *Merge) writeBinlog(binlog *pb.Binlog) error {
 	data, err := binlog.Marshal()
 	if err != nil {
 		return errors.Trace(err)
 	}
 
-	_, err = binlogger.WriteTail(&tb.Entity{Payload: data})
+	_, err = m.binlogger.WriteTail(&tb.Entity{Payload: data})
 	return errors.Trace(err)
-
 }
 
 func (m *Merge) Close() {
@@ -204,28 +240,30 @@ func (m *Merge) read(file string) (chan *pb.Binlog, chan error) {
 	return binlogChan, errChan
 }
 
-func (m *Merge) analyzeBinlog(binlog *pb.Binlog) ([]*Event, error) {
+func (m *Merge) analyzeBinlog(binlog *pb.Binlog) error {
 	switch binlog.Tp {
 	case pb.BinlogType_DML:
-		_, err := m.translateDML(binlog)
+		_, err := m.handleDML(binlog)
 		if err != nil {
-			return nil, err
+			return err
 		}
 	case pb.BinlogType_DDL:
 		err := m.ddlHandle.ExecuteDDL(string(binlog.GetDdlQuery()))
 		if err != nil {
-			return nil, err
+			return err
 		}
-		// FIXME: now only execute ddl in local tidb, need also generate binlog for it
+		// merge DML events to several binlog and write to file, then write this DDL's binlog
+		m.FlushDMLBinlog(binlog.CommitTs - 1)
+		m.writeBinlog(binlog)
 
 	default:
 		panic("unreachable")
 	}
-	return nil, nil
+	return nil
 }
 
-// translate DML binlog to multiple Event
-func (m *Merge) translateDML(binlog *pb.Binlog) ([]*Event, error) {
+// handleDML split DML binlog to multiple Event and handle them
+func (m *Merge) handleDML(binlog *pb.Binlog) ([]*Event, error) {
 	dml := binlog.DmlData
 	if dml == nil {
 		return nil, errors.New("dml binlog's data can't be empty")

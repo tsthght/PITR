@@ -40,8 +40,8 @@ func getInsertAndDeleteRowKey(row [][]byte, info *tableInfo) (string, []*pb.Colu
 	}
 	key := fmt.Sprintf("%s|%s|", info.schema, info.table)
 	var columns []string
-	if info.primaryKey != nil {
-		columns = info.primaryKey.columns
+	if len(info.uniqueKeys) != 0 {
+		columns = info.uniqueKeys[0].columns
 	} else {
 		columns = info.columns
 	}
@@ -90,8 +90,8 @@ func getUpdateRowKey(row [][]byte, info *tableInfo) (string, string, []*pb.Colum
 	key := fmt.Sprintf("%s|%s|", info.schema, info.table)
 	cKey := fmt.Sprintf("%s|%s|", info.schema, info.table)
 	var columns []string
-	if info.primaryKey != nil {
-		columns = info.primaryKey.columns
+	if len(info.uniqueKeys) != 0 {
+		columns = info.uniqueKeys[0].columns
 	} else {
 		columns = info.columns
 	}
