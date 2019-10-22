@@ -193,30 +193,39 @@ func (m *Merge) Map() error {
 //   - schema2
 //     - table3
 func (m *Merge) Reduce() error {
-	fNames, err := binlogfile.ReadDir(m.tempDir)
+	subDirs, err := binlogfile.ReadDir(m.tempDir)
 	if err != nil {
 		return errors.Trace(err)
 	}
 
-	log.Info("reduce", zap.Strings("files", fNames))
-	for _, fName := range fNames {
-		binlogCh, errCh := m.read(path.Join(m.tempDir, fName))
+	log.Info("", zap.Strings("sub dirs", subDirs))
+	for _, dir := range subDirs {
+		dirPath := path.Join(m.tempDir, dir)
+		fNames, err := binlogfile.ReadDir(dirPath)
+		if err != nil {
+			return errors.Trace(err)
+		}
+		log.Info("reduce", zap.Strings("files", fNames))
 
-	Loop:
-		for {
-			select {
-			case binlog, ok := <-binlogCh:
-				if ok {
-					err := m.analyzeBinlog(binlog)
-					if err != nil {
-						return err
+		for _, fName := range fNames {
+			binlogCh, errCh := m.read(path.Join(dirPath, fName))
+
+		Loop:
+			for {
+				select {
+				case binlog, ok := <-binlogCh:
+					if ok {
+						err := m.analyzeBinlog(binlog)
+						if err != nil {
+							return err
+						}
+						m.maxCommitTS = binlog.CommitTs
+					} else {
+						break Loop
 					}
-					m.maxCommitTS = binlog.CommitTs
-				} else {
-					break Loop
+				case err := <-errCh:
+					return err
 				}
-			case err := <-errCh:
-				return err
 			}
 		}
 	}
@@ -295,7 +304,6 @@ func (m *Merge) Close() {
 	if err := os.RemoveAll(m.tempDir); err != nil {
 		log.Warn("remove temp dir", zap.String("dir", m.tempDir), zap.Error(err))
 	}
-
 	m.ddlHandle.Close()
 }
 

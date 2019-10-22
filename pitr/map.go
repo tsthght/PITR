@@ -62,7 +62,7 @@ func (f *PBFile) AddDMLEvent(ev pb.Event, commitTS int64, key string) error {
 
 func (f *PBFile) AddDDLEvent(binlog *pb.Binlog) error {
 	dml := f.dml
-	for n, _ := range dml {
+	for n := range dml {
 		f.flushDML(n, true)
 	}
 	f.ddl = append(f.ddl, binlog)
