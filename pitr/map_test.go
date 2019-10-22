@@ -54,3 +54,31 @@ func TestPbFile(t *testing.T) {
 	os.RemoveAll(dirPath + "/")
 
 }
+
+func TestPbFileDDL(t *testing.T) {
+	dirPath := "./test_pbfile_ddl"
+	os.RemoveAll(dirPath + "/")
+
+	schema := "db1"
+	table := "tb1"
+
+	f, err := NewPbFile(dirPath, schema, table, 2)
+	assert.Assert(t, err == nil)
+
+	f.AddDDLEvent(&pb.Binlog{
+		Tp:       pb.BinlogType_DDL,
+		DdlQuery: []byte("create table tx (a int)"),
+		CommitTs: 36,
+	})
+
+	f.Close()
+
+	files, err := searchFiles(dirPath + "/" + "db1_tb1")
+	assert.Assert(t, err == nil)
+
+	files, _, err = filterFiles(files, 0, 40)
+	assert.Assert(t, err == nil)
+	assert.Assert(t, len(files) == 1)
+
+	os.RemoveAll(dirPath + "/")
+}

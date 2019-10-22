@@ -66,11 +66,17 @@ func NewMerge(binlogFiles []string, allFileSize int64) (*Merge, error) {
 		return nil, errors.Trace(err)
 	}
 
+	var snum int
+	if allFileSize <= maxMemorySize {
+		snum = 1
+	} else {
+		snum = int(allFileSize / maxMemorySize)
+	}
 	return &Merge{
 		tempDir: defaultTempDir,
 		//outputDir:   defaultOutputDir,
 		binlogFiles: binlogFiles,
-		splitNum:    int(allFileSize / maxMemorySize),
+		splitNum:    snum,
 		ddlHandle:   ddlHandle,
 		keyEvent:    make(map[string]*Event),
 		binlogger:   binlogger,
@@ -79,16 +85,102 @@ func NewMerge(binlogFiles []string, allFileSize int64) (*Merge, error) {
 
 // Map split binlog into multiple files
 func (m *Merge) Map() error {
+	fileMap := make(map[string]*PBFile)
+	log.Info("map", zap.Strings("files", m.binlogFiles))
 
-	// FIEME: now Map is not implements, so just copy binlog file to temp dir
 	for _, bFile := range m.binlogFiles {
-		_, fileName := path.Split(bFile)
-		_, err := copy(bFile, path.Join(m.tempDir, fileName))
+		f, err := os.OpenFile(bFile, os.O_RDONLY, 0600)
 		if err != nil {
-			return err
+			return errors.Annotatef(err, "open file %s error", bFile)
 		}
-	}
+		reader := bufio.NewReader(f)
+		for {
+			var key, schema, table string
+			var pf *PBFile
+			binlog, _, err := Decode(reader)
+			if err != nil {
+				if errors.Cause(err) == io.EOF {
+					break
+				} else {
+					return err
+				}
+			}
 
+			switch binlog.Tp {
+
+			case pb.BinlogType_DML:
+				dml := binlog.DmlData
+				if dml == nil {
+					return errors.New("dml binlog's data can't be empty")
+				}
+				for _, event := range dml.Events {
+					schema = event.GetSchemaName()
+					table = event.GetTableName()
+					key = fmt.Sprintf("%s_%s", schema, table)
+					if fileMap[key] == nil {
+						pf, err = NewPbFile(m.tempDir, schema, table, m.splitNum)
+						if err != nil {
+							return errors.Trace(err)
+						}
+						fileMap[key] = pf
+					} else {
+						pf = fileMap[key]
+					}
+
+					var info *tableInfo
+					info, err = m.ddlHandle.GetTableInfo(schema, table)
+					if err != nil {
+						return err
+					}
+					var hk string
+					hk, err = getHashKey(event.GetRow(), info)
+					if err != nil {
+						return err
+					}
+					pf.AddDMLEvent(event, binlog.CommitTs, hk)
+				}
+			case pb.BinlogType_DDL:
+				schema, table, err = parserSchemaTableFromDDL(string(binlog.DdlQuery))
+				if err != nil {
+					return errors.Trace(err)
+				}
+				if len(schema) == 0 {
+					return errors.New("DDL has no schema info.")
+				}
+				key = fmt.Sprintf("%s_%s", schema, table)
+				if fileMap[key] == nil {
+					pf, err = NewPbFile(m.tempDir, schema, table, m.splitNum)
+					if err != nil {
+						return errors.Trace(err)
+					}
+					fileMap[key] = pf
+				} else {
+					pf = fileMap[key]
+				}
+				err = m.ddlHandle.ExecuteDDL(string(binlog.GetDdlQuery()))
+				if err != nil {
+					return err
+				}
+				pf.AddDDLEvent(binlog)
+			default:
+				panic("unreachable")
+
+			}
+		}
+
+	}
+	for _, v := range fileMap {
+		v.Close()
+	}
+	m.ddlHandle.Close()
+
+	var handler *DDLHandle
+	var err error
+	handler, err = NewDDLHandle()
+	if err != nil {
+		return err
+	}
+	m.ddlHandle = handler
 	return nil
 }
 
