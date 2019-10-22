@@ -17,6 +17,7 @@ func genTestDDL(db, table, sql string, ts int64) *pb.Binlog {
 	return &pb.Binlog{
 		Tp:       pb.BinlogType_DDL,
 		DdlQuery: []byte(sql),
+		CommitTs: ts,
 	}
 }
 
@@ -26,6 +27,7 @@ func genTestDML(schema, table string, ts int64) *pb.Binlog {
 		DmlData: &pb.DMLData{
 			Events: generateDMLEvents(schema, table, ts),
 		},
+		CommitTs: ts,
 	}
 }
 
@@ -41,7 +43,7 @@ func generateDMLEvents(schema, table string, ts int64) []pb.Event {
 			Tp:         pb.EventType_Delete,
 			SchemaName: &schema,
 			TableName:  &table,
-			Row:        [][]byte{cols[0], cols[1]},
+			Row:        [][]byte{cols[1], cols[1]},
 		}, {
 			Tp:         pb.EventType_Update,
 			SchemaName: &schema,

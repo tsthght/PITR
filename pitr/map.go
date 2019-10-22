@@ -66,7 +66,6 @@ func (f *PBFile) AddDDLEvent(binlog *pb.Binlog) error {
 		f.flushDML(n, true)
 	}
 	f.ddl = append(f.ddl, binlog)
-
 	if len(f.ddl) >= Max_Event_Num {
 		return f.flushDDL(true)
 	}
