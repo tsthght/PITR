@@ -27,14 +27,10 @@ PACKAGES  := $$($(PACKAGE_LIST))
 PACKAGE_DIRECTORIES := $(PACKAGE_LIST) | sed 's|github.com/pingcap/$(PROJECT)/||'
 FILES := $$(find . -name '*.go' -type f)
 
-LDFLAGS += -X "github.com/pingcap/tidb-binlog/pkg/version.BuildTS=$(shell date -u '+%Y-%m-%d %I:%M:%S')"
-LDFLAGS += -X "github.com/pingcap/tidb-binlog/pkg/version.GitHash=$(shell git rev-parse HEAD)"
-LDFLAGS += -X "github.com/pingcap/tidb-binlog/pkg/version.ReleaseVersion=$(shell git describe --tags --dirty)"
-
 default: build buildsucc
 
 buildsucc:
-	@echo Build TiDB Binlog Utils successfully!
+	@echo Build PITR Utils successfully!
 
 all: dev install
 
@@ -43,7 +39,7 @@ dev: check test
 build: pitr  
 
 pitr:
-	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/pitr ./cmd/main.go
+	$(GOBUILD) -o bin/pitr ./cmd/main.go
 
 install:
 	go install ./...

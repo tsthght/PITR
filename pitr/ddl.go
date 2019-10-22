@@ -31,7 +31,7 @@ var (
 	ErrTableNotExist = errors.New("table not exist")
 
 	// used for run a mock tidb
-	defaultTiDBDir   = "/tmp/pitr_tidb"
+	defaultTiDBDir  = "/tmp/pitr_tidb"
 	defaultTiDBPort = 40404
 )
 
