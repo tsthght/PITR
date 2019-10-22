@@ -19,8 +19,9 @@ import (
 )
 
 const (
-	toolName   = "tidb-binlog-pitr"
-	timeFormat = "2006-01-02 15:04:05"
+	toolName        = "tidb-binlog-pitr"
+	timeFormat      = "2006-01-02 15:04:05"
+	defaultEtcdURLs = "http://127.0.0.1:2379"
 )
 
 // Config is the main configuration for the retore tool.
@@ -31,6 +32,8 @@ type Config struct {
 	StopDatetime  string `toml:"stop-datetime" json:"stop-datetime"`
 	StartTSO      int64  `toml:"start-tso" json:"start-tso"`
 	StopTSO       int64  `toml:"stop-tso" json:"stop-tso"`
+
+	PDURLs string `toml:"pd-urls" json:"pd-urls"`
 
 	DoTables []filter.TableName `toml:"replicate-do-table" json:"replicate-do-table"`
 	DoDBs    []string           `toml:"replicate-do-db" json:"replicate-do-db"`
@@ -62,6 +65,7 @@ func NewConfig() *Config {
 	fs.StringVar(&c.LogFile, "log-file", "", "log file path")
 	fs.StringVar(&c.LogLevel, "L", "info", "log level: debug, info, warn, error, fatal")
 	fs.StringVar(&c.configFile, "config", "", "[REQUIRED] path to configuration file")
+	fs.StringVar(&c.PDURLs, "pd-urls", defaultEtcdURLs, "a comma separated list of PD endpoints")
 	fs.BoolVar(&c.printVersion, "V", false, "print pitr version info")
 	return c
 }

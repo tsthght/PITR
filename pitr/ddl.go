@@ -12,6 +12,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/parser"
 	"github.com/pingcap/parser/ast"
+	"github.com/pingcap/parser/model"
 	"go.uber.org/zap"
 )
 
@@ -31,7 +32,7 @@ var (
 	ErrTableNotExist = errors.New("table not exist")
 
 	// used for run a mock tidb
-	defaultTiDBDir   = "/tmp/pitr_tidb"
+	defaultTiDBDir  = "/tmp/pitr_tidb"
 	defaultTiDBPort = 40404
 )
 
@@ -44,7 +45,7 @@ type DDLHandle struct {
 	tidbServer *tidblite.TiDBServer
 }
 
-func NewDDLHandle() (*DDLHandle, error) {
+func NewDDLHandle(ddls []*model.Job) (*DDLHandle, error) {
 	// run a mock tidb in local, used to execute ddl and get table info
 	if err := os.Mkdir(defaultTiDBDir, os.ModePerm); err != nil {
 		return nil, err

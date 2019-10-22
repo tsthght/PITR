@@ -9,6 +9,7 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/parser/model"
 	"github.com/pingcap/tidb-binlog/pkg/binlogfile"
 	pb "github.com/pingcap/tidb-binlog/proto/binlog"
 	tb "github.com/pingcap/tipb/go-binlog"
@@ -51,12 +52,12 @@ type Merge struct {
 }
 
 // NewMerge returns a new Merge
-func NewMerge(binlogFiles []string, allFileSize int64) (*Merge, error) {
+func NewMerge(ddls []*model.Job, binlogFiles []string, allFileSize int64) (*Merge, error) {
 	if err := os.Mkdir(defaultTempDir, 0700); err != nil {
 		return nil, err
 	}
 
-	ddlHandle, err := NewDDLHandle()
+	ddlHandle, err := NewDDLHandle(ddls)
 	if err != nil {
 		return nil, err
 	}
