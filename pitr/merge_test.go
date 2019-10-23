@@ -1,6 +1,7 @@
 package pitr
 
 import (
+	"fmt"
 	"os"
 	"testing"
 
@@ -13,6 +14,7 @@ func TestMapFunc1(t *testing.T) {
 	srcPath := "./maptest"
 	os.RemoveAll(dstPath + "/")
 	os.RemoveAll(srcPath + "/")
+	os.RemoveAll(mapDefaultTiDBDir)
 	os.RemoveAll(defaultTiDBDir)
 	os.RemoveAll(defaultTempDir)
 
@@ -57,6 +59,7 @@ func TestMapFunc1(t *testing.T) {
 	assert.Assert(t, err == nil)
 
 	merge, err := NewMerge(files, fileSize)
+	fmt.Printf("\n\n  %v \n\n", err)
 	assert.Assert(t, err == nil)
 
 	err = merge.Map()
@@ -74,8 +77,7 @@ func TestMapFunc1(t *testing.T) {
 	assert.Assert(t, err == nil)
 	assert.Assert(t, len(tb2f) == 2)
 
-	//merge.Close()
-	merge.ddlHandle.Close()
-	//os.RemoveAll(dstPath + "/")
-	//os.RemoveAll(srcPath + "/")
+	merge.Close()
+	os.RemoveAll(dstPath + "/")
+	os.RemoveAll(srcPath + "/")
 }

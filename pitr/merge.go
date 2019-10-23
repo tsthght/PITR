@@ -44,6 +44,8 @@ type Merge struct {
 	// used for handle ddl, and update table info
 	ddlHandle *DDLHandle
 
+	mapHandler *DDLHandle
+
 	// used for write output binlog
 	binlogger binlogfile.Binlogger
 
@@ -56,7 +58,12 @@ func NewMerge(binlogFiles []string, allFileSize int64) (*Merge, error) {
 		return nil, err
 	}
 
-	ddlHandle, err := NewDDLHandle()
+	ddlHandle, err := NewDDLHandle(defaultTiDBDir, defaultTiDBPort)
+	if err != nil {
+		return nil, err
+	}
+
+	mapHandler, err := NewDDLHandle(mapDefaultTiDBDir, mapDefaultTiDBPort)
 	if err != nil {
 		return nil, err
 	}
@@ -78,6 +85,7 @@ func NewMerge(binlogFiles []string, allFileSize int64) (*Merge, error) {
 		binlogFiles: binlogFiles,
 		splitNum:    snum,
 		ddlHandle:   ddlHandle,
+		mapHandler:  mapHandler,
 		keyEvent:    make(map[string]*Event),
 		binlogger:   binlogger,
 	}, nil
@@ -128,7 +136,7 @@ func (m *Merge) Map() error {
 					}
 
 					var info *tableInfo
-					info, err = m.ddlHandle.GetTableInfo(schema, table)
+					info, err = m.mapHandler.GetTableInfo(schema, table)
 					if err != nil {
 						return err
 					}
@@ -157,7 +165,7 @@ func (m *Merge) Map() error {
 				} else {
 					pf = fileMap[key]
 				}
-				err = m.ddlHandle.ExecuteDDL(string(binlog.GetDdlQuery()))
+				err = m.mapHandler.ExecuteDDL(string(binlog.GetDdlQuery()))
 				if err != nil {
 					return err
 				}
@@ -172,15 +180,6 @@ func (m *Merge) Map() error {
 	for _, v := range fileMap {
 		v.Close()
 	}
-	m.ddlHandle.Close()
-
-	var handler *DDLHandle
-	var err error
-	handler, err = NewDDLHandle()
-	if err != nil {
-		return err
-	}
-	m.ddlHandle = handler
 	return nil
 }
 
@@ -305,6 +304,7 @@ func (m *Merge) Close() {
 		log.Warn("remove temp dir", zap.String("dir", m.tempDir), zap.Error(err))
 	}
 	m.ddlHandle.Close()
+	m.mapHandler.Close()
 }
 
 // read reads binlog from pb file

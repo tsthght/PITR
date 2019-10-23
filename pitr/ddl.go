@@ -33,6 +33,9 @@ var (
 	// used for run a mock tidb
 	defaultTiDBDir  = "/tmp/pitr_tidb"
 	defaultTiDBPort = 40404
+
+	mapDefaultTiDBDir  = "/tmp/map_tidb"
+	mapDefaultTiDBPort = 50505
 )
 
 // DDLHandle used to handle ddl, and privide the table info
@@ -42,14 +45,16 @@ type DDLHandle struct {
 	tableInfos sync.Map
 
 	tidbServer *tidblite.TiDBServer
+
+	path string
 }
 
-func NewDDLHandle() (*DDLHandle, error) {
+func NewDDLHandle(path string, port int) (*DDLHandle, error) {
 	// run a mock tidb in local, used to execute ddl and get table info
-	if err := os.Mkdir(defaultTiDBDir, os.ModePerm); err != nil {
+	if err := os.Mkdir(path, os.ModePerm); err != nil {
 		return nil, err
 	}
-	tidbServer, err := tidblite.NewTiDBServer(tidblite.NewOptions(defaultTiDBDir).WithPort(defaultTiDBPort))
+	tidbServer, err := tidblite.NewTiDBServer(tidblite.NewOptions(path).WithPort(port))
 	if err != nil {
 		return nil, err
 	}
@@ -70,6 +75,7 @@ func NewDDLHandle() (*DDLHandle, error) {
 	return &DDLHandle{
 		db:         dbConn,
 		tidbServer: tidbServer,
+		path:       path,
 	}, nil
 }
 
@@ -111,8 +117,8 @@ func (d *DDLHandle) GetTableInfo(schema, table string) (*tableInfo, error) {
 func (d *DDLHandle) Close() {
 	d.tidbServer.Close()
 
-	if err := os.RemoveAll(defaultTiDBDir); err != nil {
-		log.Warn("remove temp dir", zap.String("dir", defaultTiDBDir), zap.Error(err))
+	if err := os.RemoveAll(d.path); err != nil {
+		log.Warn("remove temp dir", zap.String("dir", d.path), zap.Error(err))
 	}
 }
 
