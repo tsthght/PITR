@@ -74,8 +74,8 @@ func TestMapFunc1(t *testing.T) {
 	assert.Assert(t, err == nil)
 	assert.Assert(t, len(tb2f) == 2)
 
-	//merge.Close()
+	merge.Close()
 	merge.ddlHandle.Close()
-	//os.RemoveAll(dstPath + "/")
-	//os.RemoveAll(srcPath + "/")
+	os.RemoveAll(dstPath + "/")
+	os.RemoveAll(srcPath + "/")
 }

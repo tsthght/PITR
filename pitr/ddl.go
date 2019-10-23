@@ -2,6 +2,7 @@ package pitr
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -24,6 +25,7 @@ SELECT non_unique, index_name, seq_in_index, column_name
 FROM information_schema.statistics
 WHERE table_schema = ? AND table_name = ?
 ORDER BY seq_in_index ASC;`
+	alldatabases = `SHOW DATABASES;`
 )
 
 var (
@@ -106,6 +108,47 @@ func (d *DDLHandle) GetTableInfo(schema, table string) (*tableInfo, error) {
 		return info, nil
 	}
 	return getTableInfo(d.db, schema, table)
+}
+
+func (d *DDLHandle) getAllDatabaseNames() ([]string, error) {
+	rows, err := d.db.Query(alldatabases)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	defer rows.Close()
+
+	var names []string
+
+	for rows.Next() {
+		var name string
+		err = rows.Scan(&name)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		if strings.EqualFold(name, "mysql") || strings.EqualFold(name, "INFORMATION_SCHEMA") || strings.EqualFold(name, "PERFORMANCE_SCHEMA") {
+			continue
+		}
+		names = append(names, name)
+	}
+	return names, nil
+}
+
+func (d *DDLHandle) ResetDB() error {
+	names, err := d.getAllDatabaseNames()
+	if err != nil {
+		return err
+	}
+	var sql string
+	for _, v := range names {
+		sql = fmt.Sprintf("DROP DATABASE %s", v)
+		err = d.ExecuteDDL(sql)
+		if err != nil {
+			return err
+		}
+	}
+
+	sql = "CREATE DATABASE IF NOT EXISTS test"
+	return d.ExecuteDDL(sql)
 }
 
 func (d *DDLHandle) Close() {

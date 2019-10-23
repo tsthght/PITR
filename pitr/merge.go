@@ -172,15 +172,8 @@ func (m *Merge) Map() error {
 	for _, v := range fileMap {
 		v.Close()
 	}
-	m.ddlHandle.Close()
 
-	var handler *DDLHandle
-	var err error
-	handler, err = NewDDLHandle()
-	if err != nil {
-		return err
-	}
-	m.ddlHandle = handler
+	m.ddlHandle.ResetDB()
 	return nil
 }
 
