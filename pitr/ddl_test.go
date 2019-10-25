@@ -2,9 +2,13 @@ package pitr
 
 import (
 	"fmt"
-	"gotest.tools/assert"
 	"os"
+	"strings"
 	"testing"
+
+	"github.com/pingcap/parser"
+	"github.com/pingcap/parser/format"
+	"gotest.tools/assert"
 )
 
 func TestGetAllDatabaseNames(t *testing.T) {
@@ -66,4 +70,34 @@ func TestResetDB(t *testing.T) {
 	ns, err = ddl.getAllDatabaseNames()
 	assert.Assert(t, err == nil)
 	assert.Assert(t, len(ns) == 2)
+}
+
+func TestRestore(t *testing.T) {
+	stmts, _, err := parser.New().Parse("create database test1", "", "")
+	assert.Assert(t, err == nil)
+	var sb strings.Builder
+	for _, stmt := range stmts {
+		err = stmt.Restore(format.NewRestoreCtx(format.DefaultRestoreFlags, &sb))
+		assert.Assert(t, err == nil)
+		fmt.Printf("## %s\n", sb.String())
+	}
+}
+
+func TestGetAllTableNames(t *testing.T) {
+	sql := "create database test1"
+	sql1 := "use test1; create table t1(a int)"
+	os.RemoveAll(defaultTiDBDir)
+	ddl, err := NewDDLHandle()
+	ddl.ResetDB()
+	assert.Assert(t, err == nil)
+	err = ddl.ExecuteDDL(sql)
+	assert.Assert(t, err == nil)
+
+	err = ddl.ExecuteDDL(sql1)
+	assert.Assert(t, err == nil)
+
+	var s []string
+	s, err = ddl.getAllTableNames("test1")
+	assert.Assert(t, err == nil)
+	assert.Assert(t, len(s) == 1)
 }

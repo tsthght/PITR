@@ -3,6 +3,7 @@ package pitr
 import (
 	"database/sql"
 	"fmt"
+	"go.uber.org/zap"
 	"os"
 	"strings"
 	"sync"
@@ -13,7 +14,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/parser"
 	"github.com/pingcap/parser/ast"
-	"go.uber.org/zap"
 )
 
 const (
@@ -26,6 +26,7 @@ FROM information_schema.statistics
 WHERE table_schema = ? AND table_name = ?
 ORDER BY seq_in_index ASC;`
 	alldatabases = `SHOW DATABASES;`
+	alltables    = `SHOW TABLES;`
 )
 
 var (
@@ -358,4 +359,24 @@ func parserSchemaTableFromDDL(ddlQuery string) (schema, table string, err error)
 	}
 
 	return
+}
+
+func (d *DDLHandle) getAllTableNames(schema string) ([]string, error) {
+	udb := fmt.Sprintf("USE %s;", schema)
+	rows, err := d.db.Query(udb + alltables)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	defer rows.Close()
+
+	var names []string
+	for rows.Next() {
+		var name string
+		err = rows.Scan(&name)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		names = append(names, name)
+	}
+	return names, nil
 }
