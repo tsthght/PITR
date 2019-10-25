@@ -6,9 +6,13 @@ import (
 	"io"
 	"os"
 	"path"
+	"strings"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/parser"
+	"github.com/pingcap/parser/ast"
+	"github.com/pingcap/parser/format"
 	"github.com/pingcap/tidb-binlog/pkg/binlogfile"
 	pb "github.com/pingcap/tidb-binlog/proto/binlog"
 	tb "github.com/pingcap/tipb/go-binlog"
@@ -157,11 +161,16 @@ func (m *Merge) Map() error {
 				} else {
 					pf = fileMap[key]
 				}
+				var rebin *pb.Binlog
+				rebin, err = rewriteDDL(binlog, m.ddlHandle)
+				if err != nil {
+					return err
+				}
 				err = m.ddlHandle.ExecuteDDL(string(binlog.GetDdlQuery()))
 				if err != nil {
 					return err
 				}
-				pf.AddDDLEvent(binlog)
+				pf.AddDDLEvent(rebin)
 			default:
 				panic("unreachable")
 
@@ -438,4 +447,40 @@ func (m *Merge) HandleEvent(row *Event) {
 	} else {
 		m.keyEvent[row.oldKey] = row
 	}
+}
+
+// parserSchemaTableFromDDL parses ddl query to get schema and table
+// ddl like `use test; create table`
+func rewriteDDL(binlog *pb.Binlog, ddlHandle *DDLHandle) (*pb.Binlog, error) {
+	var ddl []byte
+	stmts, _, err := parser.New().Parse(string(binlog.DdlQuery), "", "")
+
+	for _, stmt := range stmts {
+		switch node := stmt.(type) {
+		case *ast.CreateDatabaseStmt:
+			continue
+		case *ast.DropDatabaseStmt:
+			tbs, err := ddlHandle.getAllTableNames(node.Name)
+			if err != nil {
+				return nil, err
+			}
+			for _, v := range tbs {
+				sql := fmt.Sprintf("DROP TABLE %s;", v)
+				ddl = append(ddl, sql...)
+			}
+		default:
+			var sb strings.Builder
+			err = node.Restore(format.NewRestoreCtx(format.DefaultRestoreFlags, &sb))
+			if err != nil {
+				return nil, err
+			}
+			ddl = append(ddl, sb.String()...)
+			ddl = append(ddl, ';')
+		}
+	}
+	if ddl == nil {
+		return nil, nil
+	}
+	binlog.DdlQuery = ddl
+	return binlog, nil
 }

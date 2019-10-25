@@ -1,9 +1,12 @@
 package pitr
 
 import (
+	"fmt"
 	"os"
+	"strings"
 	"testing"
 
+	"github.com/pingcap/tidb-binlog/proto/binlog"
 	tb "github.com/pingcap/tipb/go-binlog"
 	"gotest.tools/assert"
 )
@@ -73,6 +76,34 @@ func TestMapFunc1(t *testing.T) {
 	tb2f, _, err := filterFiles(tb2, 0, 300)
 	assert.Assert(t, err == nil)
 	assert.Assert(t, len(tb2f) == 2)
+
+	err = merge.Reduce()
+	assert.Assert(t, err == nil)
+
+	merge.ddlHandle.ResetDB()
+	sql := "create database test1; use test1; create table tb1 (a int);"
+	mybin := &pb_binlog.Binlog{
+		Tp:       pb_binlog.BinlogType_DDL,
+		CommitTs: 100,
+		DdlQuery: []byte(sql),
+	}
+	log, err := rewriteDDL(mybin, merge.ddlHandle)
+	assert.Assert(t, err == nil)
+	assert.Assert(t, strings.EqualFold(string(log.DdlQuery), "USE `test1`;CREATE TABLE `tb1` (`a` INT);"))
+	merge.ddlHandle.ExecuteDDL(sql)
+
+	sql = "drop database test1; create database test2; use test; show tables;"
+	mybin = &pb_binlog.Binlog{
+		Tp:       pb_binlog.BinlogType_DDL,
+		CommitTs: 100,
+		DdlQuery: []byte(sql),
+	}
+	log, err = rewriteDDL(mybin, merge.ddlHandle)
+	fmt.Printf("%v\n", err)
+	fmt.Printf("## %s\n", string(log.String()))
+	assert.Assert(t, err == nil)
+	assert.Assert(t, strings.EqualFold(string(log.DdlQuery), "DROP TABLE tb1;USE `test`;SHOW TABLES;"))
+	merge.ddlHandle.ExecuteDDL(sql)
 
 	merge.Close()
 	merge.ddlHandle.Close()
