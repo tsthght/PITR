@@ -81,7 +81,6 @@ func TestRestore(t *testing.T) {
 		assert.Assert(t, err == nil)
 		fmt.Printf("## %s\n", sb.String())
 	}
-
 }
 
 func TestGetAllTableNames(t *testing.T) {

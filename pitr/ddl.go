@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/WangXiangUSTC/tidb-lite"
+	tidblite "github.com/WangXiangUSTC/tidb-lite"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/parser"
