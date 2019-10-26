@@ -3,7 +3,6 @@ package pitr
 import (
 	"database/sql"
 	"fmt"
-	"go.uber.org/zap"
 	"os"
 	"strings"
 	"sync"
@@ -14,6 +13,8 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/parser"
 	"github.com/pingcap/parser/ast"
+	"github.com/pingcap/parser/model"
+	"go.uber.org/zap"
 )
 
 const (
@@ -50,7 +51,12 @@ type DDLHandle struct {
 	tidbServer *tidblite.TiDBServer
 }
 
-func NewDDLHandle() (*DDLHandle, error) {
+func NewDDLHandle(historyDDLs []*model.Job) (*DDLHandle, error) {
+	historySchema, err := NewSchema(historyDDLs)
+	if err != nil {
+		return nil, err
+	}
+
 	// run a mock tidb in local, used to execute ddl and get table info
 	if err := os.Mkdir(defaultTiDBDir, os.ModePerm); err != nil {
 		return nil, err
@@ -73,10 +79,21 @@ func NewDDLHandle() (*DDLHandle, error) {
 		return nil, err
 	}
 
-	return &DDLHandle{
+	ddlHandle := &DDLHandle{
 		db:         dbConn,
 		tidbServer: tidbServer,
-	}, nil
+	}
+
+	tableInfos, err := historySchema.AllTableInfos()
+	if err != nil {
+		return nil, err
+	}
+	log.Info("history table info", zap.Reflect("tableInfos", tableInfos))
+	for _, info := range tableInfos {
+		ddlHandle.tableInfos.Store(quoteSchema(info.schema, info.table), info)
+	}
+
+	return ddlHandle, nil
 }
 
 // ExecuteDDL executes ddl, and then update the table's info
