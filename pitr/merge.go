@@ -84,7 +84,7 @@ func (m *Merge) Map() error {
 	// FIEME: now Map is not implements, so just copy binlog file to temp dir
 	for _, bFile := range m.binlogFiles {
 		_, fileName := path.Split(bFile)
-		_, err := copy(bFile, path.Join(m.tempDir, fileName))
+		_, err := copyFile(bFile, path.Join(m.tempDir, fileName))
 		if err != nil {
 			return err
 		}
