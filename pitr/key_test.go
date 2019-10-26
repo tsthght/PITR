@@ -12,7 +12,7 @@ import (
 
 func TestGetHashKey(t *testing.T) {
 	os.RemoveAll(defaultTiDBDir)
-	ddl, err := NewDDLHandle()
+	ddl, err := NewDDLHandle(nil)
 	assert.Assert(t, err == nil)
 	ddl.ResetDB()
 
