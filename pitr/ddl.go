@@ -48,7 +48,12 @@ type DDLHandle struct {
 	tidbServer *tidblite.TiDBServer
 }
 
-func NewDDLHandle(ddls []*model.Job) (*DDLHandle, error) {
+func NewDDLHandle(historyDDLs []*model.Job) (*DDLHandle, error) {
+	historySchema, err := NewSchema(historyDDLs, false)
+	if err != nil {
+		return nil, err
+	}
+
 	// run a mock tidb in local, used to execute ddl and get table info
 	if err := os.Mkdir(defaultTiDBDir, os.ModePerm); err != nil {
 		return nil, err
@@ -71,10 +76,17 @@ func NewDDLHandle(ddls []*model.Job) (*DDLHandle, error) {
 		return nil, err
 	}
 
-	return &DDLHandle{
+	ddlHandle := &DDLHandle{
 		db:         dbConn,
 		tidbServer: tidbServer,
-	}, nil
+	}
+
+	tableInfos := historySchema.AllTableInfos()
+	for _, info := range tableInfos {
+		ddlHandle.tableInfos.Store(quoteSchema(info.schema, info.table), info)
+	}
+
+	return ddlHandle, nil
 }
 
 // ExecuteDDL executes ddl, and then update the table's info

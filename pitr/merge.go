@@ -56,12 +56,12 @@ type Merge struct {
 }
 
 // NewMerge returns a new Merge
-func NewMerge(ddls []*model.Job, binlogFiles []string, allFileSize int64) (*Merge, error) {
+func NewMerge(historyDDLs []*model.Job, binlogFiles []string, allFileSize int64) (*Merge, error) {
 	if err := os.Mkdir(defaultTempDir, 0700); err != nil {
 		return nil, err
 	}
 
-	ddlHandle, err := NewDDLHandle(ddls)
+	ddlHandle, err := NewDDLHandle(historyDDLs)
 	if err != nil {
 		return nil, err
 	}

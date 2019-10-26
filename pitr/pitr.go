@@ -81,6 +81,10 @@ func isAcceptableBinlog(binlog *pb.Binlog, startTs, endTs int64) bool {
 }
 
 func (r *PITR) loadHistoryDDLJobs() ([]*model.Job, error) {
+	// if PDURLs is empty, don't get history ddls
+	if len(r.cfg.PDURLs) == 0 {
+		return nil, nil
+	}
 	tiStore, err := createTiStore(r.cfg.PDURLs)
 	if err != nil {
 		return nil, errors.Trace(err)
