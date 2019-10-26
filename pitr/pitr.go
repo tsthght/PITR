@@ -48,7 +48,12 @@ func (r *PITR) Process() error {
 		return errors.Annotate(err, "filterFiles failed")
 	}
 
-	ddls, err := r.loadHistoryDDLJobs()
+	firstBinlogTs, _, err := getFirstBinlogCommitTSAndFileSize(files[0])
+	if err != nil {
+		return errors.Annotate(err, "get first binlog commit ts failed")
+	}
+
+	ddls, err := r.loadHistoryDDLJobs(firstBinlogTs)
 	if err != nil {
 		return errors.Annotate(err, "load history ddls")
 	}
@@ -80,7 +85,7 @@ func isAcceptableBinlog(binlog *pb.Binlog, startTs, endTs int64) bool {
 	return binlog.CommitTs >= startTs && (endTs == 0 || binlog.CommitTs <= endTs)
 }
 
-func (r *PITR) loadHistoryDDLJobs() ([]*model.Job, error) {
+func (r *PITR) loadHistoryDDLJobs(beginTS int64) ([]*model.Job, error) {
 	// if PDURLs is empty, don't get history ddls
 	if len(r.cfg.PDURLs) == 0 {
 		return nil, nil
@@ -95,15 +100,23 @@ func (r *PITR) loadHistoryDDLJobs() ([]*model.Job, error) {
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	jobs, err := snapMeta.GetAllHistoryDDLJobs()
+	allJobs, err := snapMeta.GetAllHistoryDDLJobs()
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 
 	// jobs from GetAllHistoryDDLJobs are sorted by job id, need sorted by schema version
-	sort.Slice(jobs, func(i, j int) bool {
-		return jobs[i].BinlogInfo.SchemaVersion < jobs[j].BinlogInfo.SchemaVersion
+	sort.Slice(allJobs, func(i, j int) bool {
+		return allJobs[i].BinlogInfo.SchemaVersion < allJobs[j].BinlogInfo.SchemaVersion
 	})
+
+	// only get ddl job which finished ts is less than begin ts
+	jobs := make([]*model.Job, 0, 10)
+	for _, job := range allJobs {
+		if int64(job.BinlogInfo.FinishedTS) < beginTS {
+			jobs = append(jobs, job)
+		}
+	}
 
 	return jobs, nil
 }
