@@ -49,7 +49,7 @@ type DDLHandle struct {
 }
 
 func NewDDLHandle(historyDDLs []*model.Job) (*DDLHandle, error) {
-	historySchema, err := NewSchema(historyDDLs, false)
+	historySchema, err := NewSchema(historyDDLs)
 	if err != nil {
 		return nil, err
 	}
@@ -81,7 +81,11 @@ func NewDDLHandle(historyDDLs []*model.Job) (*DDLHandle, error) {
 		tidbServer: tidbServer,
 	}
 
-	tableInfos := historySchema.AllTableInfos()
+	tableInfos, err := historySchema.AllTableInfos()
+	if err != nil {
+		return nil, err
+	}
+	log.Info("history table info", zap.Reflect("tableInfos", tableInfos))
 	for _, info := range tableInfos {
 		ddlHandle.tableInfos.Store(quoteSchema(info.schema, info.table), info)
 	}

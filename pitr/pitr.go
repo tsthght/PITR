@@ -94,7 +94,10 @@ func (r *PITR) loadHistoryDDLJobs(beginTS int64) ([]*model.Job, error) {
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	defer tiStore.Close()
+	defer func() {
+		tiStore.Close()
+		store.UnRegister("tikv")
+	}()
 
 	snapMeta, err := getSnapshotMeta(tiStore)
 	if err != nil {
@@ -115,6 +118,8 @@ func (r *PITR) loadHistoryDDLJobs(beginTS int64) ([]*model.Job, error) {
 	for _, job := range allJobs {
 		if int64(job.BinlogInfo.FinishedTS) < beginTS {
 			jobs = append(jobs, job)
+		} else {
+			log.Info("ignore history ddl job", zap.Reflect("job", job))
 		}
 	}
 

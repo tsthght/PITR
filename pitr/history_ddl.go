@@ -6,13 +6,9 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/parser/model"
-	"github.com/pingcap/parser/mysql"
 	"github.com/pingcap/tidb-binlog/pkg/filter"
 	"go.uber.org/zap"
 )
-
-const implicitColName = "_tidb_rowid"
-const implicitColID = -1
 
 // Schema stores the source TiDB all schema infomations
 // schema infomations could be changed by drainer init and ddls appear
@@ -38,9 +34,8 @@ type Schema struct {
 type TableName = filter.TableName
 
 // NewSchema returns the Schema object
-func NewSchema(jobs []*model.Job, hasImplicitCol bool) (*Schema, error) {
+func NewSchema(jobs []*model.Job) (*Schema, error) {
 	s := &Schema{
-		hasImplicitCol:      hasImplicitCol,
 		version2SchemaTable: make(map[int64]TableName),
 		truncateTableID:     make(map[int64]struct{}),
 		jobs:                jobs,
@@ -110,7 +105,11 @@ func (s *Schema) TableByID(id int64) (val *model.TableInfo, ok bool) {
 }
 
 // AllTables returns all the table info
-func (s *Schema) AllTableInfos() []*tableInfo {
+func (s *Schema) AllTableInfos() ([]*tableInfo, error) {
+	err := s.handleDDLs()
+	if err != nil {
+		return nil, err
+	}
 	tbInfos := make([]*tableInfo, 0, 10)
 	for id, table := range s.tables {
 		tableName, schemaName, find := s.SchemaAndTableName(id)
@@ -158,7 +157,7 @@ func (s *Schema) AllTableInfos() []*tableInfo {
 		})
 	}
 
-	return tbInfos
+	return tbInfos, nil
 }
 
 // DropSchema deletes the given DBInfo
@@ -217,10 +216,6 @@ func (s *Schema) CreateTable(schema *model.DBInfo, table *model.TableInfo) error
 		return errors.AlreadyExistsf("table %s.%s", schema.Name, table.Name)
 	}
 
-	if s.hasImplicitCol && !table.PKIsHandle {
-		addImplicitColumn(table)
-	}
-
 	schema.Tables = append(schema.Tables, table)
 	s.tables[table.ID] = table
 	s.tableIDToName[table.ID] = TableName{Schema: schema.Name.O, Table: table.Name.O}
@@ -234,10 +229,6 @@ func (s *Schema) ReplaceTable(table *model.TableInfo) error {
 	_, ok := s.tables[table.ID]
 	if !ok {
 		return errors.NotFoundf("table %s(%d)", table.Name, table.ID)
-	}
-
-	if s.hasImplicitCol && !table.PKIsHandle {
-		addImplicitColumn(table)
 	}
 
 	s.tables[table.ID] = table
@@ -267,7 +258,8 @@ func (s *Schema) addJob(job *model.Job) {
 	}
 }
 
-func (s *Schema) handlePreviousDDLJobIfNeed(version int64) error {
+func (s *Schema) handleDDLs() error {
+	log.Info("handleDDLs", zap.Reflect("jobs", s.jobs))
 	var i int
 	for i = 0; i < len(s.jobs); i++ {
 		if skipJob(s.jobs[i]) {
@@ -275,20 +267,9 @@ func (s *Schema) handlePreviousDDLJobIfNeed(version int64) error {
 			continue
 		}
 
-		if s.jobs[i].BinlogInfo.SchemaVersion <= version {
-			if s.jobs[i].BinlogInfo.SchemaVersion <= s.currentVersion {
-				log.Warn("ddl job schema version is less than current version, skip this ddl job",
-					zap.Stringer("job", s.jobs[i]),
-					zap.Int64("currentVersion", s.currentVersion))
-				continue
-			}
-
-			_, _, _, err := s.handleDDL(s.jobs[i])
-			if err != nil {
-				return errors.Annotatef(err, "handle ddl job %v failed, the schema info: %s", s.jobs[i], s)
-			}
-		} else {
-			break
+		_, _, _, err := s.handleDDL(s.jobs[i])
+		if err != nil {
+			return errors.Annotatef(err, "handle ddl job %v failed, the schema info: %s", s.jobs[i], s)
 		}
 	}
 
@@ -484,21 +465,6 @@ func (s *Schema) getSchemaTableAndDelete(version int64) (string, string, error) 
 	delete(s.version2SchemaTable, version)
 
 	return schemaTable.Schema, schemaTable.Table, nil
-}
-
-func addImplicitColumn(table *model.TableInfo) {
-	newColumn := &model.ColumnInfo{
-		ID:   implicitColID,
-		Name: model.NewCIStr(implicitColName),
-	}
-	newColumn.Tp = mysql.TypeInt24
-	table.Columns = append(table.Columns, newColumn)
-
-	newIndex := &model.IndexInfo{
-		Primary: true,
-		Columns: []*model.IndexColumn{{Name: model.NewCIStr(implicitColName)}},
-	}
-	table.Indices = []*model.IndexInfo{newIndex}
 }
 
 // TiDB write DDL Binlog for every DDL Job, we must ignore jobs that are cancelled or rollback

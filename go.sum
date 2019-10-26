@@ -8,6 +8,8 @@ github.com/Shopify/sarama v1.23.1 h1:XxJBCZEoWJtoWjf/xRbmGUpAmTZGnuuF0ON0EvxxBrs
 github.com/Shopify/sarama v1.23.1/go.mod h1:XLH1GYJnLVE0XCr6KdJGVJRTwY30moWNJ4sERjXX6fs=
 github.com/Shopify/toxiproxy v2.1.4+incompatible/go.mod h1:OXgGpZ6Cli1/URJOF1DMxUHB2q5Ap20/P/eIdh4G0pI=
 github.com/StackExchange/wmi v0.0.0-20180725035823-b12b22c5341f/go.mod h1:3eOhrUMpNV+6aFIbp5/iudMxNCF27Vw2OZgy4xEx0Fg=
+github.com/WangXiangUSTC/tidb v1.0.1-0.20191026052544-7423f064b9f0 h1:/d013AEa/c3ejHyMhC+BcNbhKZPMmLPAYUvs38vbDp4=
+github.com/WangXiangUSTC/tidb v1.0.1-0.20191026052544-7423f064b9f0/go.mod h1:/q+0J8V/qjTeYOsDhpRPVQPAJbaYOlcfjtpQPsyZFcE=
 github.com/WangXiangUSTC/tidb-lite v0.0.0-20190718135959-4a72c54defd9 h1:PR0aJueWi0OYl2zrmK/N1Yq5ssE/p0ozNXcbcyEBQFI=
 github.com/WangXiangUSTC/tidb-lite v0.0.0-20190718135959-4a72c54defd9/go.mod h1:YVzcFzk+Gb/fCDvYQ/lAWNkksq7jvCaOZOpfqLaKsIE=
 github.com/alecthomas/units v0.0.0-20151022065526-2efee857e7cf/go.mod h1:ybxpYRFXyAe+OPACYpWeL0wqObRcbAqCMya13uyzqw0=
