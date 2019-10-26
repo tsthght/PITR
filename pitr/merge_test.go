@@ -36,10 +36,6 @@ func TestMapFunc1(t *testing.T) {
 	data, _ = bin.Marshal()
 	b.WriteTail(&tb.Entity{Payload: data})
 
-	bin = genTestDDL("test", "tb1", "use test; create table tb1 (a int primary key, b int, c int)", 202)
-	data, _ = bin.Marshal()
-	b.WriteTail(&tb.Entity{Payload: data})
-
 	bin = genTestDDL("test", "tb2", "use test; create table tb2 (a int primary key, b int, c int)", 203)
 	data, _ = bin.Marshal()
 	b.WriteTail(&tb.Entity{Payload: data})

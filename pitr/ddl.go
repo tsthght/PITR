@@ -25,8 +25,11 @@ SELECT non_unique, index_name, seq_in_index, column_name
 FROM information_schema.statistics
 WHERE table_schema = ? AND table_name = ?
 ORDER BY seq_in_index ASC;`
-	alldatabases = `SHOW DATABASES;`
-	alltables    = `SHOW TABLES;`
+	alldatabases   = `SHOW DATABASES;`
+	alltables      = `SHOW TABLES;`
+	createMapDB    = `CREATE DATABASE _interval_map_;`
+	createMapTable = `USE _interval_map_; create table _inter_map_ (curKey varchar(128) unique, srcKey varchar(128));`
+	useIntervalDB  = `USE _interval_map_;`
 )
 
 var (
@@ -379,4 +382,45 @@ func (d *DDLHandle) getAllTableNames(schema string) ([]string, error) {
 		names = append(names, name)
 	}
 	return names, nil
+}
+
+func (d *DDLHandle) createMapTable() error {
+	err := d.ExecuteDDL(createMapDB)
+	if err != nil {
+		return err
+	}
+	return d.ExecuteDDL(createMapTable)
+}
+
+func (d *DDLHandle) fetchMapKeyFromDB(key string) (string, error) {
+	sel := fmt.Sprintf(`SELECT srcKey FROM _inter_map_ WHERE curKey = '%s'`, key)
+	rows, err := d.db.Query(useIntervalDB + sel)
+	if err != nil {
+		return "", errors.Trace(err)
+	}
+	defer rows.Close()
+
+	var cKey string
+	rows.Next()
+	err = rows.Scan(&cKey)
+	if err != nil {
+		return "", nil
+	}
+	return cKey, nil
+}
+
+func (d *DDLHandle) insertMapKeyFromDB(newKey, oldKey string) error {
+	s, err := d.fetchMapKeyFromDB(oldKey)
+	if err != nil {
+		return err
+	}
+	var ins string
+	if s != "" {
+		ins = fmt.Sprintf(`INSERT INTO _interval_map_._inter_map_ VALUES ('%s', '%s')`, newKey, s)
+
+	} else {
+		ins = fmt.Sprintf(`INSERT INTO _interval_map_._inter_map_ VALUES ('%s', '%s')`, newKey, oldKey)
+	}
+	_, err = d.db.Exec(ins)
+	return err
 }

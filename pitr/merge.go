@@ -131,13 +131,8 @@ func (m *Merge) Map() error {
 						pf = fileMap[key]
 					}
 
-					var info *tableInfo
-					info, err = m.ddlHandle.GetTableInfo(schema, table)
-					if err != nil {
-						return err
-					}
 					var hk string
-					hk, err = getHashKey(event.GetRow(), info)
+					hk, err = getHashKey(schema, table, event, m.ddlHandle)
 					if err != nil {
 						return err
 					}

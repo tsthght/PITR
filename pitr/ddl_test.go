@@ -101,3 +101,30 @@ func TestGetAllTableNames(t *testing.T) {
 	assert.Assert(t, err == nil)
 	assert.Assert(t, len(s) == 1)
 }
+
+func TestFetchMapKeyFromDB(t *testing.T) {
+	os.RemoveAll(defaultTiDBDir)
+	ddl, err := NewDDLHandle()
+	assert.Assert(t, err == nil)
+	ddl.ResetDB()
+
+	err = ddl.createMapTable()
+	assert.Assert(t, err == nil)
+
+	var key string
+	key, err = ddl.fetchMapKeyFromDB("mt")
+	assert.Assert(t, err == nil)
+	assert.Assert(t, key == "")
+
+	err = ddl.insertMapKeyFromDB("mt", "mt_src")
+	assert.Assert(t, err == nil)
+	key, err = ddl.fetchMapKeyFromDB("mt")
+	assert.Assert(t, err == nil)
+	assert.Assert(t, strings.EqualFold("mt_src", key))
+
+	err = ddl.insertMapKeyFromDB("mt_dst", "mt")
+	assert.Assert(t, err == nil)
+	key, err = ddl.fetchMapKeyFromDB("mt_dst")
+	assert.Assert(t, err == nil)
+	assert.Assert(t, strings.EqualFold("mt_src", key))
+}
