@@ -122,38 +122,53 @@ func formatValue(value types.Datum, tp byte) types.Datum {
 	return value
 }
 
-func getHashKey(row [][]byte, info *tableInfo) (string, error) {
-	values := make(map[string]interface{})
-
-	for _, c := range row {
-		col := &pb.Column{}
-		err := col.Unmarshal(c)
+func getHashKey(schema, table string, ev pb.Event, ddlHandle *DDLHandle) (string, error) {
+	tableInfo, err := ddlHandle.GetTableInfo(schema, table)
+	if err != nil {
+		return "", err
+	}
+	var key string
+	switch ev.GetTp() {
+	case pb.EventType_Insert, pb.EventType_Delete:
+		key, _, err = getInsertAndDeleteRowKey(ev.GetRow(), tableInfo)
 		if err != nil {
-			return "", errors.Trace(err)
+			return "", err
+		}
+	case pb.EventType_Update:
+		var cKey string
+		var sKey string
+		key, cKey, _, err = getUpdateRowKey(ev.GetRow(), tableInfo)
+		if err != nil {
+			return "", err
 		}
 
-		_, val, err := codec.DecodeOne(col.Value)
-		if err != nil {
-			return "", errors.Trace(err)
+		if len(tableInfo.uniqueKeys) == 0 {
+			break
 		}
 
-		tp := col.Tp[0]
-		val = formatValue(val, tp)
-		log.Info("format value",
-			zap.String("col name", col.Name),
-			zap.String("mysql type", col.MysqlType),
-			zap.Reflect("value", val.GetValue()))
-		values[col.Name] = val.GetValue()
-	}
-	key := fmt.Sprintf("%s|%s|", info.schema, info.table)
-	var columns []string
-	if len(info.uniqueKeys) != 0 {
-		columns = info.uniqueKeys[0].columns
-	} else {
-		columns = info.columns
-	}
-	for _, col := range columns {
-		key += fmt.Sprintf("%v|", values[col])
+		sKey, err = ddlHandle.fetchMapKeyFromDB(key)
+		if err != nil {
+			return "", nil
+		}
+		if sKey != "" {
+			key = sKey
+		}
+
+		if cKey != key {
+			sKey, err = ddlHandle.fetchMapKeyFromDB(cKey)
+			if err != nil {
+				return "", err
+			}
+
+			if sKey == "" {
+				err = ddlHandle.insertMapKeyFromDB(cKey, key)
+				if err != nil {
+					return "", err
+				}
+			}
+		}
+	default:
+		panic("unreachable")
 	}
 
 	return key, nil
