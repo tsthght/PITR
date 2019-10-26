@@ -121,3 +121,40 @@ func formatValue(value types.Datum, tp byte) types.Datum {
 
 	return value
 }
+
+func getHashKey(row [][]byte, info *tableInfo) (string, error) {
+	values := make(map[string]interface{})
+
+	for _, c := range row {
+		col := &pb.Column{}
+		err := col.Unmarshal(c)
+		if err != nil {
+			return "", errors.Trace(err)
+		}
+
+		_, val, err := codec.DecodeOne(col.Value)
+		if err != nil {
+			return "", errors.Trace(err)
+		}
+
+		tp := col.Tp[0]
+		val = formatValue(val, tp)
+		log.Info("format value",
+			zap.String("col name", col.Name),
+			zap.String("mysql type", col.MysqlType),
+			zap.Reflect("value", val.GetValue()))
+		values[col.Name] = val.GetValue()
+	}
+	key := fmt.Sprintf("%s|%s|", info.schema, info.table)
+	var columns []string
+	if len(info.uniqueKeys) != 0 {
+		columns = info.uniqueKeys[0].columns
+	} else {
+		columns = info.columns
+	}
+	for _, col := range columns {
+		key += fmt.Sprintf("%v|", values[col])
+	}
+
+	return key, nil
+}

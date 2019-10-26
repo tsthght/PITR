@@ -6,9 +6,13 @@ import (
 	"io"
 	"os"
 	"path"
+	"strings"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/parser"
+	"github.com/pingcap/parser/ast"
+	"github.com/pingcap/parser/format"
 	"github.com/pingcap/parser/model"
 	"github.com/pingcap/tidb-binlog/pkg/binlogfile"
 	pb "github.com/pingcap/tidb-binlog/proto/binlog"
@@ -67,11 +71,17 @@ func NewMerge(ddls []*model.Job, binlogFiles []string, allFileSize int64) (*Merg
 		return nil, errors.Trace(err)
 	}
 
+	var snum int
+	if allFileSize <= maxMemorySize {
+		snum = 1
+	} else {
+		snum = int(allFileSize / maxMemorySize)
+	}
 	return &Merge{
 		tempDir: defaultTempDir,
 		//outputDir:   defaultOutputDir,
 		binlogFiles: binlogFiles,
-		splitNum:    int(allFileSize / maxMemorySize),
+		splitNum:    snum,
 		ddlHandle:   ddlHandle,
 		keyEvent:    make(map[string]*Event),
 		binlogger:   binlogger,
@@ -80,16 +90,100 @@ func NewMerge(ddls []*model.Job, binlogFiles []string, allFileSize int64) (*Merg
 
 // Map split binlog into multiple files
 func (m *Merge) Map() error {
+	fileMap := make(map[string]*PBFile)
+	log.Info("map", zap.Strings("files", m.binlogFiles))
 
-	// FIEME: now Map is not implements, so just copy binlog file to temp dir
 	for _, bFile := range m.binlogFiles {
-		_, fileName := path.Split(bFile)
-		_, err := copyFile(bFile, path.Join(m.tempDir, fileName))
+		f, err := os.OpenFile(bFile, os.O_RDONLY, 0600)
 		if err != nil {
-			return err
+			return errors.Annotatef(err, "open file %s error", bFile)
 		}
+		reader := bufio.NewReader(f)
+		for {
+			var key, schema, table string
+			var pf *PBFile
+			binlog, _, err := Decode(reader)
+			if err != nil {
+				if errors.Cause(err) == io.EOF {
+					break
+				} else {
+					return err
+				}
+			}
+
+			switch binlog.Tp {
+
+			case pb.BinlogType_DML:
+				dml := binlog.DmlData
+				if dml == nil {
+					return errors.New("dml binlog's data can't be empty")
+				}
+				for _, event := range dml.Events {
+					schema = event.GetSchemaName()
+					table = event.GetTableName()
+					key = fmt.Sprintf("%s_%s", schema, table)
+					if fileMap[key] == nil {
+						pf, err = NewPbFile(m.tempDir, schema, table, m.splitNum)
+						if err != nil {
+							return errors.Trace(err)
+						}
+						fileMap[key] = pf
+					} else {
+						pf = fileMap[key]
+					}
+
+					var info *tableInfo
+					info, err = m.ddlHandle.GetTableInfo(schema, table)
+					if err != nil {
+						return err
+					}
+					var hk string
+					hk, err = getHashKey(event.GetRow(), info)
+					if err != nil {
+						return err
+					}
+					pf.AddDMLEvent(event, binlog.CommitTs, hk)
+				}
+			case pb.BinlogType_DDL:
+				schema, table, err = parserSchemaTableFromDDL(string(binlog.DdlQuery))
+				if err != nil {
+					return errors.Trace(err)
+				}
+				if len(schema) == 0 {
+					return errors.New("DDL has no schema info.")
+				}
+				key = fmt.Sprintf("%s_%s", schema, table)
+				if fileMap[key] == nil {
+					pf, err = NewPbFile(m.tempDir, schema, table, m.splitNum)
+					if err != nil {
+						return errors.Trace(err)
+					}
+					fileMap[key] = pf
+				} else {
+					pf = fileMap[key]
+				}
+				var rebin *pb.Binlog
+				rebin, err = rewriteDDL(binlog, m.ddlHandle)
+				if err != nil {
+					return err
+				}
+				err = m.ddlHandle.ExecuteDDL(string(binlog.GetDdlQuery()))
+				if err != nil {
+					return err
+				}
+				pf.AddDDLEvent(rebin)
+			default:
+				panic("unreachable")
+
+			}
+		}
+
+	}
+	for _, v := range fileMap {
+		v.Close()
 	}
 
+	m.ddlHandle.ResetDB()
 	return nil
 }
 
@@ -102,30 +196,39 @@ func (m *Merge) Map() error {
 //   - schema2
 //     - table3
 func (m *Merge) Reduce() error {
-	fNames, err := binlogfile.ReadDir(m.tempDir)
+	subDirs, err := binlogfile.ReadDir(m.tempDir)
 	if err != nil {
 		return errors.Trace(err)
 	}
 
-	log.Info("reduce", zap.Strings("files", fNames))
-	for _, fName := range fNames {
-		binlogCh, errCh := m.read(path.Join(m.tempDir, fName))
+	log.Info("", zap.Strings("sub dirs", subDirs))
+	for _, dir := range subDirs {
+		dirPath := path.Join(m.tempDir, dir)
+		fNames, err := binlogfile.ReadDir(dirPath)
+		if err != nil {
+			return errors.Trace(err)
+		}
+		log.Info("reduce", zap.Strings("files", fNames))
 
-	Loop:
-		for {
-			select {
-			case binlog, ok := <-binlogCh:
-				if ok {
-					err := m.analyzeBinlog(binlog)
-					if err != nil {
-						return err
+		for _, fName := range fNames {
+			binlogCh, errCh := m.read(path.Join(dirPath, fName))
+
+		Loop:
+			for {
+				select {
+				case binlog, ok := <-binlogCh:
+					if ok {
+						err := m.analyzeBinlog(binlog)
+						if err != nil {
+							return err
+						}
+						m.maxCommitTS = binlog.CommitTs
+					} else {
+						break Loop
 					}
-					m.maxCommitTS = binlog.CommitTs
-				} else {
-					break Loop
+				case err := <-errCh:
+					return err
 				}
-			case err := <-errCh:
-				return err
 			}
 		}
 	}
@@ -204,7 +307,6 @@ func (m *Merge) Close() {
 	if err := os.RemoveAll(m.tempDir); err != nil {
 		log.Warn("remove temp dir", zap.String("dir", m.tempDir), zap.Error(err))
 	}
-
 	m.ddlHandle.Close()
 }
 
@@ -346,4 +448,40 @@ func (m *Merge) HandleEvent(row *Event) {
 	} else {
 		m.keyEvent[row.oldKey] = row
 	}
+}
+
+// parserSchemaTableFromDDL parses ddl query to get schema and table
+// ddl like `use test; create table`
+func rewriteDDL(binlog *pb.Binlog, ddlHandle *DDLHandle) (*pb.Binlog, error) {
+	var ddl []byte
+	stmts, _, err := parser.New().Parse(string(binlog.DdlQuery), "", "")
+
+	for _, stmt := range stmts {
+		switch node := stmt.(type) {
+		case *ast.CreateDatabaseStmt:
+			continue
+		case *ast.DropDatabaseStmt:
+			tbs, err := ddlHandle.getAllTableNames(node.Name)
+			if err != nil {
+				return nil, err
+			}
+			for _, v := range tbs {
+				sql := fmt.Sprintf("DROP TABLE %s;", v)
+				ddl = append(ddl, sql...)
+			}
+		default:
+			var sb strings.Builder
+			err = node.Restore(format.NewRestoreCtx(format.DefaultRestoreFlags, &sb))
+			if err != nil {
+				return nil, err
+			}
+			ddl = append(ddl, sb.String()...)
+			ddl = append(ddl, ';')
+		}
+	}
+	if ddl == nil {
+		return nil, nil
+	}
+	binlog.DdlQuery = ddl
+	return binlog, nil
 }
