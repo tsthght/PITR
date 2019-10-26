@@ -41,16 +41,10 @@ type Merge struct {
 	// memory maybe not enough, need split all binlog files into multiple temp files
 	splitNum int
 
-	// schema -> table -> table-file
-	//fd map[string]map[string]*os.File
-
 	keyEvent map[string]*Event
 
 	// used for handle ddl, and update table info
 	ddlHandle *DDLHandle
-
-	// used for write output binlog
-	binlogger binlogfile.Binlogger
 
 	maxCommitTS int64
 }
@@ -66,11 +60,6 @@ func NewMerge(historyDDLs []*model.Job, binlogFiles []string, allFileSize int64)
 		return nil, err
 	}
 
-	binlogger, err := binlogfile.OpenBinlogger(defaultOutputDir)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-
 	var snum int
 	if allFileSize <= maxMemorySize {
 		snum = 1
@@ -78,13 +67,12 @@ func NewMerge(historyDDLs []*model.Job, binlogFiles []string, allFileSize int64)
 		snum = int(allFileSize / maxMemorySize)
 	}
 	return &Merge{
-		tempDir: defaultTempDir,
-		//outputDir:   defaultOutputDir,
+		tempDir:     defaultTempDir,
+		outputDir:   defaultOutputDir,
 		binlogFiles: binlogFiles,
 		splitNum:    snum,
 		ddlHandle:   ddlHandle,
 		keyEvent:    make(map[string]*Event),
-		binlogger:   binlogger,
 	}, nil
 }
 
@@ -190,11 +178,10 @@ func (m *Merge) Map() error {
 // Reduce merge same keys binlog into one, and output to file
 // every file only contain one table's binlog, just like:
 // - output
-//   - schema1
-//     - table1
-//     - table2
-//   - schema2
-//     - table3
+//   - schema1_table1
+//   _ schema1_table2
+//   - schema2_table1
+//   - schema2_table2
 func (m *Merge) Reduce() error {
 	subDirs, err := binlogfile.ReadDir(m.tempDir)
 	if err != nil {
@@ -203,6 +190,12 @@ func (m *Merge) Reduce() error {
 
 	log.Info("", zap.Strings("sub dirs", subDirs))
 	for _, dir := range subDirs {
+
+		binlogger, err := binlogfile.OpenBinlogger(path.Join(defaultOutputDir, dir))
+		if err != nil {
+			return errors.Trace(err)
+		}
+
 		dirPath := path.Join(m.tempDir, dir)
 		fNames, err := binlogfile.ReadDir(dirPath)
 		if err != nil {
@@ -218,7 +211,7 @@ func (m *Merge) Reduce() error {
 				select {
 				case binlog, ok := <-binlogCh:
 					if ok {
-						err := m.analyzeBinlog(binlog)
+						err := m.analyzeBinlog(binlogger, binlog)
 						if err != nil {
 							return err
 						}
@@ -231,13 +224,18 @@ func (m *Merge) Reduce() error {
 				}
 			}
 		}
+
+		err = m.FlushDMLBinlog(binlogger, m.maxCommitTS)
+		if err != nil {
+			return err
+		}
 	}
 
-	return m.FlushDMLBinlog(m.maxCommitTS)
+	return err
 }
 
 // FlushDMLBinlog merge some events to one binlog, and then write to file
-func (m *Merge) FlushDMLBinlog(commitTS int64) error {
+func (m *Merge) FlushDMLBinlog(binlogger binlogfile.Binlogger, commitTS int64) error {
 	binlog := m.newDMLBinlog(commitTS)
 	i := 0
 	for _, row := range m.keyEvent {
@@ -262,7 +260,7 @@ func (m *Merge) FlushDMLBinlog(commitTS int64) error {
 
 		// every binlog contain 1000 rows as default
 		if i%1000 == 0 {
-			err := m.writeBinlog(binlog)
+			err := m.writeBinlog(binlogger, binlog)
 			if err != nil {
 				return err
 			}
@@ -271,7 +269,7 @@ func (m *Merge) FlushDMLBinlog(commitTS int64) error {
 	}
 
 	if len(binlog.DmlData.Events) != 0 {
-		err := m.writeBinlog(binlog)
+		err := m.writeBinlog(binlogger, binlog)
 		if err != nil {
 			return err
 		}
@@ -293,13 +291,13 @@ func (m *Merge) newDMLBinlog(commitTS int64) *pb.Binlog {
 	}
 }
 
-func (m *Merge) writeBinlog(binlog *pb.Binlog) error {
+func (m *Merge) writeBinlog(binlogger binlogfile.Binlogger, binlog *pb.Binlog) error {
 	data, err := binlog.Marshal()
 	if err != nil {
 		return errors.Trace(err)
 	}
 
-	_, err = m.binlogger.WriteTail(&tb.Entity{Payload: data})
+	_, err = binlogger.WriteTail(&tb.Entity{Payload: data})
 	return errors.Trace(err)
 }
 
@@ -343,7 +341,7 @@ func (m *Merge) read(file string) (chan *pb.Binlog, chan error) {
 	return binlogChan, errChan
 }
 
-func (m *Merge) analyzeBinlog(binlog *pb.Binlog) error {
+func (m *Merge) analyzeBinlog(binlogger binlogfile.Binlogger, binlog *pb.Binlog) error {
 	switch binlog.Tp {
 	case pb.BinlogType_DML:
 		_, err := m.handleDML(binlog)
@@ -356,8 +354,8 @@ func (m *Merge) analyzeBinlog(binlog *pb.Binlog) error {
 			return err
 		}
 		// merge DML events to several binlog and write to file, then write this DDL's binlog
-		m.FlushDMLBinlog(binlog.CommitTs - 1)
-		m.writeBinlog(binlog)
+		m.FlushDMLBinlog(binlogger, binlog.CommitTs-1)
+		m.writeBinlog(binlogger, binlog)
 
 	default:
 		panic("unreachable")
