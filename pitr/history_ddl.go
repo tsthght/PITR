@@ -109,6 +109,58 @@ func (s *Schema) TableByID(id int64) (val *model.TableInfo, ok bool) {
 	return
 }
 
+// AllTables returns all the table info
+func (s *Schema) AllTableInfos() []*tableInfo {
+	tbInfos := make([]*tableInfo, 0, 10)
+	for id, table := range s.tables {
+		tableName, schemaName, find := s.SchemaAndTableName(id)
+		if !find {
+			continue
+		}
+		columns := make([]string, 0, len(table.Columns))
+		for _, column := range table.Columns {
+			columns = append(columns, column.Name.O)
+		}
+		var primaryKey *indexInfo
+		uniqueKeys := make([]indexInfo, 0, 3)
+		for _, index := range table.Indices {
+			indexName := index.Name.O
+			if index.Primary || index.Unique {
+				indexColumns := make([]string, 0, len(index.Columns))
+				for _, column := range index.Columns {
+					indexColumns = append(indexColumns, column.Name.O)
+				}
+				iInfo := &indexInfo{
+					name:    indexName,
+					columns: indexColumns,
+				}
+
+				if index.Primary {
+					primaryKey = iInfo
+				} else {
+					uniqueKeys = append(uniqueKeys, *iInfo)
+				}
+			}
+		}
+
+		// put pk at the first of uniqueKeys
+		if primaryKey != nil {
+			uniqueKeys = append(uniqueKeys, *primaryKey)
+			uniqueKeys[0], uniqueKeys[len(uniqueKeys)-1] = uniqueKeys[len(uniqueKeys)-1], uniqueKeys[0]
+		}
+
+		tbInfos = append(tbInfos, &tableInfo{
+			schema:     schemaName,
+			table:      tableName,
+			columns:    columns,
+			primaryKey: primaryKey,
+			uniqueKeys: uniqueKeys,
+		})
+	}
+
+	return tbInfos
+}
+
 // DropSchema deletes the given DBInfo
 func (s *Schema) DropSchema(id int64) (string, error) {
 	schema, ok := s.schemas[id]
